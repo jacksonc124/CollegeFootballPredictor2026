@@ -415,8 +415,8 @@ def render_parlay_tab(df_inner, logos_inner):
             unsafe_allow_html=True,
         )
     with col_plus:
-        st.button(
-            "+", key="legs_plus",
+        st.button("＋",
+            key="legs_plus",
             on_click=inc_legs,
             use_container_width=True,
             disabled=(st.session_state["parlay_legs"] >= 6),
