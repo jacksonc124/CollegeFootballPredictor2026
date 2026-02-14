@@ -306,8 +306,8 @@ def logo_img(team, size=32):
 # ══════════════════════════════════════════════════════════════════════════════
 tab1, tab2, tab3, tab4 = st.tabs([
     "🏆  CBS Pick'em Top 12",
-    "🎰  3-Team Parlays",
-    "🥇  Championship Futures",
+    "🎰  Team Parlays",
+    "🥇  Championship Favorites",
     "🏅  Heisman Favorites",
 ])
 
@@ -368,15 +368,27 @@ with tab1:
 # ── TAB 2: Parlays ────────────────────────────────────────────────────────────
 @st.fragment
 def render_parlay_tab(df_inner, logos_inner):
-    st.markdown("## 🎰 Suggested Parlays")
+    st.markdown("## 🎰 Team Parlays")
     st.caption("Built from Tier A & B picks · Combined prob = product of cover probs · Est. payout assumes −110 per leg")
 
-    # +/- leg counter
+    # Callbacks defined inside fragment so they trigger a fragment-only rerun
+    def dec_legs():
+        if st.session_state["parlay_legs"] > 2:
+            st.session_state["parlay_legs"] -= 1
+
+    def inc_legs():
+        if st.session_state["parlay_legs"] < 6:
+            st.session_state["parlay_legs"] += 1
+
+    # +/- counter — narrow columns so buttons sit tight around the number
     col_minus, col_display, col_plus = st.columns([1, 1, 1])
     with col_minus:
-        if st.button("−", key="legs_minus", use_container_width=True):
-            if st.session_state["parlay_legs"] > 2:
-                st.session_state["parlay_legs"] -= 1
+        st.button(
+            "−", key="legs_minus",
+            on_click=dec_legs,
+            use_container_width=True,
+            disabled=(st.session_state["parlay_legs"] <= 2),
+        )
     with col_display:
         st.markdown(
             f'<div class="leg-display">{st.session_state["parlay_legs"]}</div>'
@@ -384,9 +396,12 @@ def render_parlay_tab(df_inner, logos_inner):
             unsafe_allow_html=True,
         )
     with col_plus:
-        if st.button("+", key="legs_plus", use_container_width=True):
-            if st.session_state["parlay_legs"] < 6:
-                st.session_state["parlay_legs"] += 1
+        st.button(
+            "+", key="legs_plus",
+            on_click=inc_legs,
+            use_container_width=True,
+            disabled=(st.session_state["parlay_legs"] >= 6),
+        )
 
     leg_count = st.session_state["parlay_legs"]
     pool_size = leg_count + 4
@@ -415,8 +430,10 @@ def render_parlay_tab(df_inner, logos_inner):
         legs_html = ""
         for _, leg in p["legs"].iterrows():
             lm = logos_inner.get(leg["pick_team"], "")
-            logo_tag = (f'<img src="{lm}" width="20" height="20" style="object-fit:contain;vertical-align:middle;" />'
-                        if lm else "")
+            logo_tag = (
+                f'<img src="{lm}" width="20" height="20" style="object-fit:contain;vertical-align:middle;" />'
+                if lm else ""
+            )
             legs_html += (
                 f'<div class="parlay-leg">'
                 f'{logo_tag}&nbsp;<b>{leg["pick_team"]}</b> ATS'
@@ -502,15 +519,18 @@ with tab3:
 @st.cache_data(show_spinner=False, ttl=3600)
 def get_player_stats(yr: int, wk: int) -> pd.DataFrame:
     """
-    Pull season player stats up to `wk` from CFBD PlayersApi.
-    Returns a merged DataFrame with passing, rushing, receiving per player.
+    Pull cumulative season player stats through `wk` from CFBD.
+    Returns a DataFrame with one row per player.
     """
     cache_file = CACHE_DIR / f"player_stats_{yr}_wk{wk}.json"
     if cache_file.exists():
-        return pd.read_json(cache_file)
+        try:
+            return pd.read_json(cache_file)
+        except Exception:
+            cache_file.unlink()   # corrupt cache — delete and re-fetch
 
-    categories = ["passing", "rushing", "receiving"]
-    all_rows   = {}
+    categories  = ["passing", "rushing", "receiving"]
+    player_map  = {}   # keyed by (player_id, name, team)
 
     with make_client() as client:
         players_api = cfbd.PlayersApi(client)
@@ -526,34 +546,39 @@ def get_player_stats(yr: int, wk: int) -> pd.DataFrame:
                 continue
 
             for s in stats:
-                key = (getattr(s, "player_id", None), getattr(s, "player", None))
-                if key not in all_rows:
-                    all_rows[key] = {
-                        "player_id":  getattr(s, "player_id", None),
-                        "name":       getattr(s, "player", ""),
-                        "team":       getattr(s, "team", ""),
-                        "conference": getattr(s, "conference", ""),
-                        "pass_yds": 0, "pass_td": 0, "pass_att": 0,
-                        "rush_yds": 0, "rush_td": 0, "rush_att": 0,
-                        "rec_yds":  0, "rec_td":  0, "rec":      0,
+                # Newer cfbd library uses snake_case attributes
+                pid   = getattr(s, "player_id",  None) or getattr(s, "id", None)
+                name  = getattr(s, "player",     "") or getattr(s, "name", "")
+                team  = getattr(s, "team",        "")
+                stype = getattr(s, "stat_type",   "") or getattr(s, "type", "")
+                val   = float(getattr(s, "stat",  0) or 0)
+
+                key = (pid, name, team)
+                if key not in player_map:
+                    player_map[key] = {
+                        "name": name, "team": team,
+                        "pass_yds": 0, "pass_td": 0,
+                        "rush_yds": 0, "rush_td": 0,
+                        "rec_yds":  0, "rec_td":  0,
                     }
-                stat_type = getattr(s, "stat_type", "")
-                val       = float(getattr(s, "stat", 0) or 0)
 
-                mapping = {
-                    "YDS":  {"passing": "pass_yds", "rushing": "rush_yds", "receiving": "rec_yds"},
-                    "TD":   {"passing": "pass_td",  "rushing": "rush_td",  "receiving": "rec_td"},
-                    "ATT":  {"passing": "pass_att", "rushing": "rush_att"},
-                    "REC":  {"receiving": "rec"},
-                }
-                for stat_key, cat_map in mapping.items():
-                    if stat_type == stat_key and cat in cat_map:
-                        all_rows[key][cat_map[cat]] += val
+                # Map stat_type string → field
+                field = {
+                    ("passing",   "YDS"): "pass_yds",
+                    ("passing",   "TD"):  "pass_td",
+                    ("rushing",   "YDS"): "rush_yds",
+                    ("rushing",   "TD"):  "rush_td",
+                    ("receiving", "YDS"): "rec_yds",
+                    ("receiving", "TD"):  "rec_td",
+                }.get((cat, stype))
 
-    if not all_rows:
+                if field:
+                    player_map[key][field] += val
+
+    if not player_map:
         return pd.DataFrame()
 
-    df_out = pd.DataFrame(list(all_rows.values()))
+    df_out = pd.DataFrame(list(player_map.values()))
     df_out.to_json(cache_file)
     return df_out
 
@@ -563,6 +588,13 @@ with tab4:
     st.markdown("## 🏅 Heisman Trophy Leaderboard")
     st.caption(f"Model score through Week {week} · {year} season · Weighted formula: passing + rushing + receiving production")
 
+    if st.button("🔄 Clear cached stats & reload", key="clear_heisman"):
+        cache_file = CACHE_DIR / f"player_stats_{year}_wk{week}.json"
+        if cache_file.exists():
+            cache_file.unlink()
+        st.cache_data.clear()
+        st.rerun()
+
     with st.spinner("Fetching player stats…"):
         try:
             pstats = get_player_stats(year, week)
@@ -571,7 +603,8 @@ with tab4:
             st.error(f"Could not fetch player stats: {e}")
 
     if pstats.empty:
-        st.info("No player stats available for this year/week combination.")
+        st.warning(f"No player stats returned from CFBD for {year} through week {week}.")
+        st.info("This usually means the season hasn't started yet, or this year/week has no data in CFBD. Try a past season like 2022 week 10.")
     else:
         # Heisman score formula
         pstats["heisman_score"] = (
