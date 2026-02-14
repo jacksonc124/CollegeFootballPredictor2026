@@ -527,11 +527,11 @@ with tab3:
         cards_html += "</div>"
         st.markdown(cards_html, unsafe_allow_html=True)
 
-        st.markdown("---")
-        st.dataframe(
-            display_champ.rename(columns={"SP+ Rating": "SP+ Rating (higher = better)"}).reset_index(drop=True),
-            use_container_width=True, hide_index=True
-        )
+        # st.markdown("---")
+        # st.dataframe(
+        #     display_champ.rename(columns={"SP+ Rating": "SP+ Rating (higher = better)"}).reset_index(drop=True),
+        #     use_container_width=True, hide_index=True
+        # )
 
 
 # ── Heisman player stats fetcher ──────────────────────────────────────────────
