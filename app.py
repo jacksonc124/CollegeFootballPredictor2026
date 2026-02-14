@@ -1,8 +1,23 @@
 import math
 import os
 import itertools
+from datetime import date
 import streamlit as st
 import pandas as pd
+
+
+# ── current CFB week helper ───────────────────────────────────────────────────
+# CFB regular season starts ~Sep 1; each week is 7 days.
+def get_current_cfb_week() -> tuple:
+    today        = date.today()
+    current_year = today.year
+    season_start = date(current_year, 9, 1)
+    if today < season_start:
+        # Offseason — show most recent completed season week 1
+        return current_year - 1, 1
+    delta_days = (today - season_start).days
+    week = min((delta_days // 7) + 1, 15)
+    return current_year, week
 
 # ── page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -134,28 +149,36 @@ def classify_tier(cover_prob: float) -> str:
     return "Pass"
 
 
+# ── fixed model constants (not exposed to UI) ─────────────────────────────────
+SPREAD_STD_DEV    = 13.0
+EDGE_THRESHOLD    = 2.0
+COVER_PROB_THRESH = 0.55
+PROVIDER          = "consensus"
+SEASON_TYPE       = "regular"
+
+# ── bearer token from Streamlit secrets ───────────────────────────────────────
+try:
+    bearer_token = st.secrets["BEARER_TOKEN"]
+except Exception:
+    bearer_token = os.environ.get("BEARER_TOKEN", "")
+
 # ── sidebar ───────────────────────────────────────────────────────────────────
+default_year, default_week = get_current_cfb_week()
 
 with st.sidebar:
     st.markdown("# 🏈 CFB MODEL")
     st.markdown("---")
 
     st.markdown("### Season")
-    year        = st.number_input("Year",  min_value=2000, max_value=2030, value=2022, step=1)
-    week        = st.number_input("Week",  min_value=1,    max_value=20,   value=14,   step=1)
-    season_type = st.selectbox("Season Type", ["regular", "postseason"], index=0)
+    year = st.number_input("Year", min_value=2000, max_value=2030, value=default_year, step=1)
+    week = st.number_input("Week", min_value=1,    max_value=20,   value=default_week, step=1)
 
-    st.markdown("### Model Parameters")
-    home_field     = st.number_input("Home Field Advantage (pts)", min_value=0.0,  max_value=10.0, value=2.5,  step=0.5)
-    spread_std_dev = st.number_input("Spread Std Dev (pts)",       min_value=1.0,  max_value=30.0, value=13.0, step=0.5)
-
-    st.markdown("### Edge Filters")
-    edge_threshold    = st.number_input("Min Edge (pts)",        min_value=0.0,  max_value=20.0, value=2.0,  step=0.5)
-    cover_prob_thresh = st.number_input("Min Cover Probability", min_value=0.50, max_value=0.80, value=0.55, step=0.01, format="%.2f")
-
-    st.markdown("### API")
-    provider     = st.text_input("Provider",     value="consensus")
-    bearer_token = st.text_input("Bearer Token", value=os.environ.get("BEARER_TOKEN", ""), type="password")
+    st.markdown("### Model")
+    home_field = st.number_input(
+        "Home Field Advantage (pts)",
+        min_value=0.0, max_value=10.0, value=2.5, step=0.5,
+        help="Suggested: 2.5 pts"
+    )
 
     run_btn = st.button("RUN MODEL")
 
@@ -182,7 +205,7 @@ except ImportError:
     st.stop()
 
 if not bearer_token:
-    st.error("No Bearer Token provided.")
+    st.error("No Bearer Token found. Make sure BEARER_TOKEN is set in your Streamlit secrets.")
     st.stop()
 
 # ── API setup ─────────────────────────────────────────────────────────────────
@@ -308,7 +331,7 @@ def build_picks(yr, wk, stype, hf, std, prov):
 
 with st.spinner("Fetching ratings, lines, and logos…"):
     try:
-        df    = build_picks(year, week, season_type, home_field, spread_std_dev, provider)
+        df    = build_picks(year, week, SEASON_TYPE, home_field, SPREAD_STD_DEV, PROVIDER)
         logos = get_team_logos(year)
     except Exception as e:
         st.error(f"API error: {e}")
@@ -321,8 +344,8 @@ if df.empty:
 # ── summary metrics ───────────────────────────────────────────────────────────
 
 strong = df[
-    (df["Edge (pts)"].abs() >= edge_threshold)
-    & (df["Cover Prob"] >= cover_prob_thresh)
+    (df["Edge (pts)"].abs() >= EDGE_THRESHOLD)
+    & (df["Cover Prob"] >= COVER_PROB_THRESH)
     & (df["Tier"] != "Pass")
 ]
 
