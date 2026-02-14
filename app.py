@@ -220,46 +220,63 @@ def get_team_logos(yr):
 
 # ── The Odds API fetchers ─────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False, ttl=3600)
-def get_futures_odds(market: str) -> list:
+def get_futures_odds(market: str) -> list | str:
     """
-    Fetch NCAAF futures from The Odds API (free tier).
-    market: 'championship_winner' or 'heisman_trophy_winner'
-    Returns list of { name, team, odds, implied_prob } sorted by odds.
-    Requires ODDS_API_KEY in secrets.
+    Fetch NCAAF futures from The Odds API.
+    Uses the /v4/sports/.../events + /v4/sports/.../events/{id}/odds endpoint
+    which is the correct endpoint for futures/outrights.
+    Returns list of { name, team, odds, implied_prob } or an error string.
     """
     if not odds_api_key:
         return []
-    url = f"https://api.the-odds-api.com/v4/sports/americanfootball_ncaaf/odds/"
+
+    # Futures live under the outrights sport key for NCAAF
+    sport_key = "americanfootball_ncaaf_championship_winner" if "championship" in market else "americanfootball_ncaaf_heisman_trophy_winner"
+
+    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
     params = {
-        "apiKey":   odds_api_key,
-        "regions":  "us",
-        "markets":  market,
+        "apiKey":     odds_api_key,
+        "regions":    "us",
+        "markets":    "outrights",
         "oddsFormat": "american",
         "bookmakers": "draftkings",
     }
+
     try:
         resp = requests.get(url, params=params, timeout=10)
         data = resp.json()
-    except Exception:
-        return []
+    except Exception as e:
+        return f"Request failed: {e}"
+
+    # API error response is a dict with 'message' key
+    if isinstance(data, dict):
+        return data.get("message", "Unknown API error")
+
+    if not isinstance(data, list) or len(data) == 0:
+        return "no_data"
 
     outcomes = []
     for event in data:
+        if not isinstance(event, dict):
+            continue
         for bm in event.get("bookmakers", []):
             for mkt in bm.get("markets", []):
-                if mkt.get("key") == market:
-                    for o in mkt.get("outcomes", []):
-                        name  = o.get("name", "")
-                        odds  = o.get("price", 0)
-                        desc  = o.get("description", "")
+                for o in mkt.get("outcomes", []):
+                    name = o.get("name", "")
+                    odds = o.get("price", 0)
+                    desc = o.get("description", "")
+                    if name and isinstance(odds, (int, float)):
                         outcomes.append({
                             "name":         name,
                             "team":         desc,
-                            "odds":         odds,
-                            "implied_prob": american_to_implied(odds),
+                            "odds":         int(odds),
+                            "implied_prob": american_to_implied(int(odds)),
                         })
 
-    # De-dupe by name, keep best (lowest positive / highest negative) odds
+    if not outcomes:
+        return "no_data"
+
+    # De-dupe by name, keep best odds
     seen = {}
     for o in outcomes:
         key = o["name"]
@@ -412,22 +429,30 @@ with tab1:
 
 # ── TAB 2: Parlays ────────────────────────────────────────────────────────────
 with tab2:
-    st.markdown("## 🎰 Suggested 3-Team Parlays")
+    st.markdown("## 🎰 Suggested Parlays")
     st.caption("Built from Tier A & B picks · Combined prob = product of cover probs · Est. payout assumes −110 per leg")
 
-    parlay_pool = (df[df["Tier"].isin(["A","B"]) & (df["pick_team"] != "")]
-                   .sort_values("Cover Prob", ascending=False).head(8).reset_index(drop=True))
+    leg_count = st.slider("Number of legs", min_value=2, max_value=6, value=3, step=1, key="parlay_legs")
 
-    if len(parlay_pool) < 3:
-        st.info("Not enough Tier A/B picks to build parlays. Try lowering your thresholds.")
+    # Pool size: need enough picks to form meaningful combos — use top (leg_count + 4)
+    pool_size  = leg_count + 4
+    parlay_pool = (df[df["Tier"].isin(["A","B"]) & (df["pick_team"] != "")]
+                   .sort_values("Cover Prob", ascending=False)
+                   .head(pool_size).reset_index(drop=True))
+
+    if len(parlay_pool) < leg_count:
+        st.info(f"Not enough Tier A/B picks to build {leg_count}-team parlays. Try lowering your thresholds or reducing leg count.")
     else:
-        combos = list(itertools.combinations(parlay_pool.index, 3))
+        combos = list(itertools.combinations(parlay_pool.index, leg_count))
         parlay_rows = sorted(
             [{"joint_prob": round(parlay_pool.loc[list(c), "Cover Prob"].prod(), 4),
               "legs": parlay_pool.loc[list(c)]} for c in combos],
             key=lambda x: x["joint_prob"], reverse=True
         )
-        payout = round(((100 / 110) + 1) ** 3, 2)
+
+        # Payout at -110 per leg: ((100/110) + 1)^n
+        payout = round(((100 / 110) + 1) ** leg_count, 2)
+
         all_html = ""
         for i, p in enumerate(parlay_rows[:5]):
             legs_html = ""
@@ -443,7 +468,9 @@ with tab2:
                 )
             all_html += (
                 f'<div class="parlay-card">'
-                f'<div class="parlay-title">Parlay #{i + 1}</div>'
+                f'<div class="parlay-title">Parlay #{i + 1} &nbsp;'
+                f'<span style="font-size:14px;color:#64748b;font-family:\'IBM Plex Mono\',monospace;">'
+                f'{leg_count}-leg</span></div>'
                 f'{legs_html}'
                 f'<div class="parlay-prob">'
                 f'Combined Probability: {p["joint_prob"]:.1%}'
@@ -464,7 +491,12 @@ with tab3:
         with st.spinner("Fetching championship odds…"):
             champ_odds = get_futures_odds("championship_winner")
 
-        if not champ_odds:
+        if isinstance(champ_odds, str):
+            if champ_odds == "no_data":
+                st.info("No championship odds are available yet — check back once the season is underway.")
+            else:
+                st.error(f"Odds API error: {champ_odds}")
+        elif not champ_odds:
             st.error("Could not fetch championship odds. Check your ODDS_API_KEY or try again later.")
         else:
             top_n = st.slider("Show top N teams", min_value=5, max_value=min(30, len(champ_odds)), value=12, step=1, key="champ_slider")
@@ -507,7 +539,12 @@ with tab4:
         with st.spinner("Fetching Heisman odds…"):
             heisman_odds = get_futures_odds("heisman_trophy_winner")
 
-        if not heisman_odds:
+        if isinstance(heisman_odds, str):
+            if heisman_odds == "no_data":
+                st.info("No Heisman odds are available yet — check back once the season is underway.")
+            else:
+                st.error(f"Odds API error: {heisman_odds}")
+        elif not heisman_odds:
             st.error("Could not fetch Heisman odds. Check your ODDS_API_KEY or try again later.")
         else:
             top_n_h = st.slider("Show top N players", min_value=5, max_value=min(30, len(heisman_odds)), value=12, step=1, key="heisman_slider")
