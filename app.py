@@ -151,7 +151,7 @@ with st.sidebar:
         format_func=lambda x: "Regular Season" if x == "regular" else "Postseason / Bowls",
         horizontal=True,
     )
-    week = st.number_input(
+    week = st.slider(
         "Week",
         min_value=1, max_value=20,
         value=default_week if season_type == "regular" else 1,
