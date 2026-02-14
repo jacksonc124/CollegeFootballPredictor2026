@@ -169,7 +169,7 @@ with st.sidebar:
 
 # ── header ────────────────────────────────────────────────────────────────────
 season_label = f"WK {week}" if season_type == "regular" else f"POSTSEASON WK {week}"
-st.markdown(f"{year} {season_label}")
+st.markdown(f"# CFB — {year} {season_label}")
 st.markdown("SP+ ratings vs. consensus market spreads · Edge-based ATS picks")
 st.markdown("---")
 
