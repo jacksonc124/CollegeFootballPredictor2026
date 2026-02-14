@@ -1,7 +1,6 @@
 import math
 import os
 import itertools
-import requests
 from datetime import date
 import streamlit as st
 import pandas as pd
@@ -72,6 +71,23 @@ st.markdown("""
     .parlay-leg:last-child { border-bottom: none; }
     .parlay-prob { font-family: 'Bebas Neue', sans-serif; font-size: 18px; color: #facc15; margin-top: 10px; }
 
+    /* +/- leg counter */
+    .leg-display {
+        font-family: 'Bebas Neue', sans-serif; font-size: 52px;
+        color: #22c55e; line-height: 1; text-align: center;
+    }
+    .leg-label { font-size: 11px; color: #64748b; letter-spacing: 1px; text-align: center; margin-top: 2px; }
+    div[data-testid="column"] button[kind="secondary"] {
+        background: #1e2330 !important; color: #e2e8f0 !important;
+        font-family: 'Bebas Neue', sans-serif !important;
+        font-size: 28px !important; border: 1px solid #334155 !important;
+        border-radius: 8px !important; padding: 4px 20px !important;
+        width: 100% !important;
+    }
+    div[data-testid="column"] button[kind="secondary"]:hover {
+        background: #334155 !important; color: #fff !important;
+    }
+
     /* Futures cards */
     .futures-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-top: 12px; }
     .futures-card { background: #13161e; border: 1px solid #1e2330; border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 6px; }
@@ -98,15 +114,6 @@ def classify_tier(p):
     if p >= 0.52: return "C"
     return "Pass"
 
-def american_to_implied(odds: int) -> float:
-    if odds > 0:
-        return round(100 / (odds + 100) * 100, 1)
-    else:
-        return round(abs(odds) / (abs(odds) + 100) * 100, 1)
-
-def fmt_odds(odds: int) -> str:
-    return f"+{odds}" if odds > 0 else str(odds)
-
 
 # ── constants ─────────────────────────────────────────────────────────────────
 SPREAD_STD_DEV    = 13.0
@@ -116,16 +123,15 @@ PROVIDER          = "consensus"
 SEASON_TYPE       = "regular"
 
 
+# ── session state defaults ────────────────────────────────────────────────────
+if "parlay_legs" not in st.session_state:
+    st.session_state["parlay_legs"] = 3
+
 # ── secrets ───────────────────────────────────────────────────────────────────
 try:
     bearer_token = st.secrets["BEARER_TOKEN"]
 except Exception:
     bearer_token = os.environ.get("BEARER_TOKEN", "")
-
-try:
-    odds_api_key = st.secrets["ODDS_API_KEY"]
-except Exception:
-    odds_api_key = os.environ.get("ODDS_API_KEY", "")
 
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
@@ -216,74 +222,6 @@ def get_team_logos(yr):
         pass
     cache_file.write_text(json.dumps(logos))
     return logos
-
-
-# ── The Odds API fetchers ─────────────────────────────────────────────────────
-@st.cache_data(show_spinner=False, ttl=3600)
-def get_futures_odds(market: str) -> list | str:
-    """
-    Fetch NCAAF futures from The Odds API.
-    Uses the /v4/sports/.../events + /v4/sports/.../events/{id}/odds endpoint
-    which is the correct endpoint for futures/outrights.
-    Returns list of { name, team, odds, implied_prob } or an error string.
-    """
-    if not odds_api_key:
-        return []
-
-    # Futures live under the outrights sport key for NCAAF
-    sport_key = "americanfootball_ncaaf_championship_winner" if "championship" in market else "americanfootball_ncaaf_heisman_trophy_winner"
-
-    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
-    params = {
-        "apiKey":     odds_api_key,
-        "regions":    "us",
-        "markets":    "outrights",
-        "oddsFormat": "american",
-        "bookmakers": "draftkings",
-    }
-
-    try:
-        resp = requests.get(url, params=params, timeout=10)
-        data = resp.json()
-    except Exception as e:
-        return f"Request failed: {e}"
-
-    # API error response is a dict with 'message' key
-    if isinstance(data, dict):
-        return data.get("message", "Unknown API error")
-
-    if not isinstance(data, list) or len(data) == 0:
-        return "no_data"
-
-    outcomes = []
-    for event in data:
-        if not isinstance(event, dict):
-            continue
-        for bm in event.get("bookmakers", []):
-            for mkt in bm.get("markets", []):
-                for o in mkt.get("outcomes", []):
-                    name = o.get("name", "")
-                    odds = o.get("price", 0)
-                    desc = o.get("description", "")
-                    if name and isinstance(odds, (int, float)):
-                        outcomes.append({
-                            "name":         name,
-                            "team":         desc,
-                            "odds":         int(odds),
-                            "implied_prob": american_to_implied(int(odds)),
-                        })
-
-    if not outcomes:
-        return "no_data"
-
-    # De-dupe by name, keep best odds
-    seen = {}
-    for o in outcomes:
-        key = o["name"]
-        if key not in seen or o["odds"] < seen[key]["odds"]:
-            seen[key] = o
-
-    return sorted(seen.values(), key=lambda x: x["odds"])
 
 
 # ── Model ─────────────────────────────────────────────────────────────────────
@@ -428,149 +366,278 @@ with tab1:
 
 
 # ── TAB 2: Parlays ────────────────────────────────────────────────────────────
-with tab2:
+@st.fragment
+def render_parlay_tab(df_inner, logos_inner):
     st.markdown("## 🎰 Suggested Parlays")
     st.caption("Built from Tier A & B picks · Combined prob = product of cover probs · Est. payout assumes −110 per leg")
 
-    leg_count = st.slider("Number of legs", min_value=2, max_value=6, value=3, step=1, key="parlay_legs")
+    # +/- leg counter
+    col_minus, col_display, col_plus = st.columns([1, 1, 1])
+    with col_minus:
+        if st.button("−", key="legs_minus", use_container_width=True):
+            if st.session_state["parlay_legs"] > 2:
+                st.session_state["parlay_legs"] -= 1
+    with col_display:
+        st.markdown(
+            f'<div class="leg-display">{st.session_state["parlay_legs"]}</div>'
+            f'<div class="leg-label">LEGS</div>',
+            unsafe_allow_html=True,
+        )
+    with col_plus:
+        if st.button("+", key="legs_plus", use_container_width=True):
+            if st.session_state["parlay_legs"] < 6:
+                st.session_state["parlay_legs"] += 1
 
-    # Pool size: need enough picks to form meaningful combos — use top (leg_count + 4)
-    pool_size  = leg_count + 4
-    parlay_pool = (df[df["Tier"].isin(["A","B"]) & (df["pick_team"] != "")]
-                   .sort_values("Cover Prob", ascending=False)
-                   .head(pool_size).reset_index(drop=True))
+    leg_count = st.session_state["parlay_legs"]
+    pool_size = leg_count + 4
+
+    parlay_pool = (
+        df_inner[df_inner["Tier"].isin(["A", "B"]) & (df_inner["pick_team"] != "")]
+        .sort_values("Cover Prob", ascending=False)
+        .head(pool_size)
+        .reset_index(drop=True)
+    )
 
     if len(parlay_pool) < leg_count:
-        st.info(f"Not enough Tier A/B picks to build {leg_count}-team parlays. Try lowering your thresholds or reducing leg count.")
-    else:
-        combos = list(itertools.combinations(parlay_pool.index, leg_count))
-        parlay_rows = sorted(
-            [{"joint_prob": round(parlay_pool.loc[list(c), "Cover Prob"].prod(), 4),
-              "legs": parlay_pool.loc[list(c)]} for c in combos],
-            key=lambda x: x["joint_prob"], reverse=True
-        )
+        st.info(f"Not enough Tier A/B picks for a {leg_count}-leg parlay. Try reducing legs or lowering thresholds.")
+        return
 
-        # Payout at -110 per leg: ((100/110) + 1)^n
-        payout = round(((100 / 110) + 1) ** leg_count, 2)
+    combos = list(itertools.combinations(parlay_pool.index, leg_count))
+    parlay_rows = sorted(
+        [{"joint_prob": round(parlay_pool.loc[list(c), "Cover Prob"].prod(), 4),
+          "legs": parlay_pool.loc[list(c)]} for c in combos],
+        key=lambda x: x["joint_prob"], reverse=True,
+    )
+    payout = round(((100 / 110) + 1) ** leg_count, 2)
 
-        all_html = ""
-        for i, p in enumerate(parlay_rows[:5]):
-            legs_html = ""
-            for _, leg in p["legs"].iterrows():
-                legs_html += (
-                    f'<div class="parlay-leg">'
-                    f'{logo_img(leg["pick_team"], 20)}&nbsp;<b>{leg["pick_team"]}</b> ATS'
-                    f'&nbsp;<span style="color:#64748b">({leg["Away"]} @ {leg["Home"]})</span>'
-                    f'&nbsp;&middot;&nbsp;Cover Prob: <b style="color:#facc15">{leg["Cover Prob"]:.1%}</b>'
-                    f'&nbsp;&middot;&nbsp;Edge: <b>{leg["Edge (pts)"]:+.1f} pts</b>'
-                    f'&nbsp;&middot;&nbsp;Tier {leg["Tier"]}'
-                    f'</div>'
-                )
-            all_html += (
-                f'<div class="parlay-card">'
-                f'<div class="parlay-title">Parlay #{i + 1} &nbsp;'
-                f'<span style="font-size:14px;color:#64748b;font-family:\'IBM Plex Mono\',monospace;">'
-                f'{leg_count}-leg</span></div>'
-                f'{legs_html}'
-                f'<div class="parlay-prob">'
-                f'Combined Probability: {p["joint_prob"]:.1%}'
-                f'&nbsp;&middot;&nbsp;Est. Payout (&minus;110 each): ~{payout}x'
-                f'</div></div>'
+    all_html = ""
+    for i, p in enumerate(parlay_rows[:5]):
+        legs_html = ""
+        for _, leg in p["legs"].iterrows():
+            lm = logos_inner.get(leg["pick_team"], "")
+            logo_tag = (f'<img src="{lm}" width="20" height="20" style="object-fit:contain;vertical-align:middle;" />'
+                        if lm else "")
+            legs_html += (
+                f'<div class="parlay-leg">'
+                f'{logo_tag}&nbsp;<b>{leg["pick_team"]}</b> ATS'
+                f'&nbsp;<span style="color:#64748b">({leg["Away"]} @ {leg["Home"]})</span>'
+                f'&nbsp;&middot;&nbsp;Cover Prob: <b style="color:#facc15">{leg["Cover Prob"]:.1%}</b>'
+                f'&nbsp;&middot;&nbsp;Edge: <b>{leg["Edge (pts)"]:+.1f} pts</b>'
+                f'&nbsp;&middot;&nbsp;Tier {leg["Tier"]}'
+                f'</div>'
             )
-        st.markdown(all_html, unsafe_allow_html=True)
+        all_html += (
+            f'<div class="parlay-card">'
+            f'<div class="parlay-title">Parlay #{i + 1}'
+            f'&nbsp;<span style="font-size:14px;color:#64748b;font-family:\'IBM Plex Mono\',monospace;">'
+            f'{leg_count}-leg</span></div>'
+            f'{legs_html}'
+            f'<div class="parlay-prob">'
+            f'Combined Probability: {p["joint_prob"]:.1%}'
+            f'&nbsp;&middot;&nbsp;Est. Payout (&minus;110 each): ~{payout}x'
+            f'</div></div>'
+        )
+    st.markdown(all_html, unsafe_allow_html=True)
+
+
+with tab2:
+    render_parlay_tab(df, logos)
 
 
 # ── TAB 3: Championship Futures ───────────────────────────────────────────────
 with tab3:
-    st.markdown("## 🥇 National Championship Futures")
-    st.caption("Live odds via The Odds API (DraftKings) · Sorted by implied probability")
+    st.markdown("## 🥇 National Championship Favorites")
+    st.caption(f"Based on SP+ ratings through Week {week} · {year} season · Higher rating = stronger team")
 
-    if not odds_api_key:
-        st.warning("No ODDS_API_KEY found in secrets. Add your free key from [the-odds-api.com](https://the-odds-api.com) to see live futures.")
+    sp_ratings = get_sp_ratings(year)
+
+    if not sp_ratings:
+        st.warning("No SP+ ratings found for this year/week combination.")
     else:
-        with st.spinner("Fetching championship odds…"):
-            champ_odds = get_futures_odds("championship_winner")
+        sp_df = (
+            pd.DataFrame(list(sp_ratings.items()), columns=["Team", "SP+ Rating"])
+            .sort_values("SP+ Rating", ascending=False)
+            .reset_index(drop=True)
+        )
 
-        if isinstance(champ_odds, str):
-            if champ_odds == "no_data":
-                st.info("No championship odds are available yet — check back once the season is underway.")
-            else:
-                st.error(f"Odds API error: {champ_odds}")
-        elif not champ_odds:
-            st.error("Could not fetch championship odds. Check your ODDS_API_KEY or try again later.")
-        else:
-            top_n = st.slider("Show top N teams", min_value=5, max_value=min(30, len(champ_odds)), value=12, step=1, key="champ_slider")
-            display = champ_odds[:top_n]
+        top_n_champ = st.slider("Show top N teams", min_value=5, max_value=min(25, len(sp_df)), value=12, step=1, key="champ_slider")
+        display_champ = sp_df.head(top_n_champ)
 
-            cards_html = '<div class="futures-grid">'
-            for i, item in enumerate(display):
-                rank_class = {0: "rank-1", 1: "rank-2", 2: "rank-3"}.get(i, "rank-other")
-                medal      = {0: "🥇", 1: "🥈", 2: "🥉"}.get(i, f"#{i+1}")
-                logo_tag   = logo_img(item["name"], 40)
-                cards_html += (
-                    f'<div class="futures-card {rank_class}">'
-                    f'<div class="futures-rank">{medal}</div>'
-                    f'{logo_tag}'
-                    f'<div class="futures-name">{item["name"]}</div>'
-                    f'<div class="futures-odds">{fmt_odds(item["odds"])}</div>'
-                    f'<div class="futures-implied">Implied: {item["implied_prob"]}%</div>'
-                    f'</div>'
+        # SP+ range for normalizing the bar width
+        sp_max = display_champ["SP+ Rating"].max()
+        sp_min = display_champ["SP+ Rating"].min()
+
+        cards_html = '<div class="futures-grid">'
+        for i, row in display_champ.iterrows():
+            rank      = i + 1
+            team      = row["Team"]
+            rating    = row["SP+ Rating"]
+            rank_class = {1: "rank-1", 2: "rank-2", 3: "rank-3"}.get(rank, "rank-other")
+            medal      = {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"#{rank}")
+            logo_tag   = logo_img(team, 40)
+            bar_pct    = int((rating - sp_min) / (sp_max - sp_min + 0.001) * 100) if sp_max != sp_min else 80
+            cards_html += (
+                f'<div class="futures-card {rank_class}">'
+                f'<div class="futures-rank">{medal}</div>'
+                f'{logo_tag}'
+                f'<div class="futures-name">{team}</div>'
+                f'<div class="futures-odds" style="font-size:20px;">{rating:+.1f}</div>'
+                f'<div class="futures-implied">SP+ Rating</div>'
+                f'<div style="margin-top:6px;background:#1e2330;border-radius:4px;height:4px;width:100%;">'
+                f'<div style="background:#22c55e;border-radius:4px;height:4px;width:{bar_pct}%;"></div>'
+                f'</div>'
+                f'</div>'
+            )
+        cards_html += "</div>"
+        st.markdown(cards_html, unsafe_allow_html=True)
+
+        st.markdown("---")
+        st.dataframe(
+            display_champ.rename(columns={"SP+ Rating": "SP+ Rating (higher = better)"}).reset_index(drop=True),
+            use_container_width=True, hide_index=True
+        )
+
+
+# ── Heisman player stats fetcher ──────────────────────────────────────────────
+@st.cache_data(show_spinner=False, ttl=3600)
+def get_player_stats(yr: int, wk: int) -> pd.DataFrame:
+    """
+    Pull season player stats up to `wk` from CFBD PlayersApi.
+    Returns a merged DataFrame with passing, rushing, receiving per player.
+    """
+    cache_file = CACHE_DIR / f"player_stats_{yr}_wk{wk}.json"
+    if cache_file.exists():
+        return pd.read_json(cache_file)
+
+    categories = ["passing", "rushing", "receiving"]
+    all_rows   = {}
+
+    with make_client() as client:
+        players_api = cfbd.PlayersApi(client)
+        for cat in categories:
+            try:
+                stats = players_api.get_player_season_stats(
+                    year=yr,
+                    end_week=wk,
+                    season_type="regular",
+                    category=cat,
                 )
-            cards_html += "</div>"
-            st.markdown(cards_html, unsafe_allow_html=True)
+            except Exception:
+                continue
 
-            st.markdown("---")
-            champ_df = pd.DataFrame(display).rename(columns={
-                "name": "Team", "odds": "American Odds",
-                "implied_prob": "Implied Prob (%)", "team": "Description"
-            }).drop(columns=["Description"], errors="ignore")
-            champ_df["American Odds"] = champ_df["American Odds"].apply(fmt_odds)
-            st.dataframe(champ_df, use_container_width=True, hide_index=True)
+            for s in stats:
+                key = (getattr(s, "player_id", None), getattr(s, "player", None))
+                if key not in all_rows:
+                    all_rows[key] = {
+                        "player_id":  getattr(s, "player_id", None),
+                        "name":       getattr(s, "player", ""),
+                        "team":       getattr(s, "team", ""),
+                        "conference": getattr(s, "conference", ""),
+                        "pass_yds": 0, "pass_td": 0, "pass_att": 0,
+                        "rush_yds": 0, "rush_td": 0, "rush_att": 0,
+                        "rec_yds":  0, "rec_td":  0, "rec":      0,
+                    }
+                stat_type = getattr(s, "stat_type", "")
+                val       = float(getattr(s, "stat", 0) or 0)
+
+                mapping = {
+                    "YDS":  {"passing": "pass_yds", "rushing": "rush_yds", "receiving": "rec_yds"},
+                    "TD":   {"passing": "pass_td",  "rushing": "rush_td",  "receiving": "rec_td"},
+                    "ATT":  {"passing": "pass_att", "rushing": "rush_att"},
+                    "REC":  {"receiving": "rec"},
+                }
+                for stat_key, cat_map in mapping.items():
+                    if stat_type == stat_key and cat in cat_map:
+                        all_rows[key][cat_map[cat]] += val
+
+    if not all_rows:
+        return pd.DataFrame()
+
+    df_out = pd.DataFrame(list(all_rows.values()))
+    df_out.to_json(cache_file)
+    return df_out
 
 
 # ── TAB 4: Heisman ───────────────────────────────────────────────────────────
 with tab4:
-    st.markdown("## 🏅 Heisman Trophy Favorites")
-    st.caption("Live odds via The Odds API (DraftKings) · Sorted by implied probability")
+    st.markdown("## 🏅 Heisman Trophy Leaderboard")
+    st.caption(f"Model score through Week {week} · {year} season · Weighted formula: passing + rushing + receiving production")
 
-    if not odds_api_key:
-        st.warning("No ODDS_API_KEY found in secrets. Add your free key from [the-odds-api.com](https://the-odds-api.com) to see live futures.")
+    with st.spinner("Fetching player stats…"):
+        try:
+            pstats = get_player_stats(year, week)
+        except Exception as e:
+            pstats = pd.DataFrame()
+            st.error(f"Could not fetch player stats: {e}")
+
+    if pstats.empty:
+        st.info("No player stats available for this year/week combination.")
     else:
-        with st.spinner("Fetching Heisman odds…"):
-            heisman_odds = get_futures_odds("heisman_trophy_winner")
+        # Heisman score formula
+        pstats["heisman_score"] = (
+              pstats["pass_yds"] * 0.3
+            + pstats["pass_td"]  * 15
+            + pstats["rush_yds"] * 0.5
+            + pstats["rush_td"]  * 20
+            + pstats["rec_yds"]  * 0.5
+            + pstats["rec_td"]   * 20
+        ).round(1)
 
-        if isinstance(heisman_odds, str):
-            if heisman_odds == "no_data":
-                st.info("No Heisman odds are available yet — check back once the season is underway.")
-            else:
-                st.error(f"Odds API error: {heisman_odds}")
-        elif not heisman_odds:
-            st.error("Could not fetch Heisman odds. Check your ODDS_API_KEY or try again later.")
+        # Filter out near-zero contributors and sort
+        heisman_df = (
+            pstats[pstats["heisman_score"] > 50]
+            .sort_values("heisman_score", ascending=False)
+            .reset_index(drop=True)
+        )
+
+        if heisman_df.empty:
+            st.info("Not enough player data accumulated yet — check back after a few weeks of the season.")
         else:
-            top_n_h = st.slider("Show top N players", min_value=5, max_value=min(30, len(heisman_odds)), value=12, step=1, key="heisman_slider")
-            display_h = heisman_odds[:top_n_h]
+            top_n_h = st.slider("Show top N players", min_value=5, max_value=min(25, len(heisman_df)), value=12, step=1, key="heisman_slider")
+            display_h = heisman_df.head(top_n_h)
+
+            score_max = display_h["heisman_score"].max()
+            score_min = display_h["heisman_score"].min()
 
             cards_html = '<div class="futures-grid">'
-            for i, item in enumerate(display_h):
-                rank_class = {0: "rank-1", 1: "rank-2", 2: "rank-3"}.get(i, "rank-other")
-                medal      = {0: "🥇", 1: "🥈", 2: "🥉"}.get(i, f"#{i+1}")
-                team_tag   = f'<div class="futures-team">{item["team"]}</div>' if item.get("team") else ""
+            for i, row in display_h.iterrows():
+                rank       = i + 1
+                rank_class = {1: "rank-1", 2: "rank-2", 3: "rank-3"}.get(rank, "rank-other")
+                medal      = {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"#{rank}")
+                team       = row["team"]
+                logo_tag   = logo_img(team, 36)
+                bar_pct    = int((row["heisman_score"] - score_min) / (score_max - score_min + 0.001) * 100) if score_max != score_min else 80
+
+                # Stat breakdown — only show non-zero lines
+                stat_parts = []
+                if row["pass_yds"] > 0:
+                    stat_parts.append(f'{int(row["pass_yds"])} pass yds / {int(row["pass_td"])} TD')
+                if row["rush_yds"] > 0:
+                    stat_parts.append(f'{int(row["rush_yds"])} rush yds / {int(row["rush_td"])} TD')
+                if row["rec_yds"] > 0:
+                    stat_parts.append(f'{int(row["rec_yds"])} rec yds / {int(row["rec_td"])} TD')
+                stats_html = "".join(
+                    f'<div class="futures-implied">{p}</div>' for p in stat_parts
+                )
+
                 cards_html += (
                     f'<div class="futures-card {rank_class}">'
                     f'<div class="futures-rank">{medal}</div>'
-                    f'<div class="futures-name">{item["name"]}</div>'
-                    f'{team_tag}'
-                    f'<div class="futures-odds">{fmt_odds(item["odds"])}</div>'
-                    f'<div class="futures-implied">Implied: {item["implied_prob"]}%</div>'
+                    f'{logo_tag}'
+                    f'<div class="futures-name">{row["name"]}</div>'
+                    f'<div class="futures-team">{team}</div>'
+                    f'<div class="futures-odds" style="font-size:20px;">{row["heisman_score"]:.0f}</div>'
+                    f'<div class="futures-implied">Heisman Score</div>'
+                    f'{stats_html}'
+                    f'<div style="margin-top:6px;background:#1e2330;border-radius:4px;height:4px;width:100%;">'
+                    f'<div style="background:#facc15;border-radius:4px;height:4px;width:{bar_pct}%;"></div>'
+                    f'</div>'
                     f'</div>'
                 )
             cards_html += "</div>"
             st.markdown(cards_html, unsafe_allow_html=True)
 
             st.markdown("---")
-            heisman_df = pd.DataFrame(display_h).rename(columns={
-                "name": "Player", "team": "Team",
-                "odds": "American Odds", "implied_prob": "Implied Prob (%)"
-            })
-            heisman_df["American Odds"] = heisman_df["American Odds"].apply(fmt_odds)
-            st.dataframe(heisman_df, use_container_width=True, hide_index=True)
+            table_df = display_h[["name", "team", "pass_yds", "pass_td", "rush_yds", "rush_td", "rec_yds", "rec_td", "heisman_score"]].copy()
+            table_df.columns = ["Player", "Team", "Pass Yds", "Pass TD", "Rush Yds", "Rush TD", "Rec Yds", "Rec TD", "Score"]
+            st.dataframe(table_df.reset_index(drop=True), use_container_width=True, hide_index=True)
