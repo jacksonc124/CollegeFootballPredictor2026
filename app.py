@@ -18,7 +18,7 @@ def get_current_cfb_week() -> tuple:
 
 
 # ── page config ───────────────────────────────────────────────────────────────
-st.set_page_config(page_title="CFB Betting Model", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="CFB Gambling Model", page_icon="🏈", layout="wide")
 
 # ── styling ───────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -169,7 +169,7 @@ with st.sidebar:
 
 # ── header ────────────────────────────────────────────────────────────────────
 season_label = f"WK {week}" if season_type == "regular" else f"POSTSEASON WK {week}"
-st.markdown(f"# CFB BETTING MODEL — {year} {season_label}")
+st.markdown(f"#{year} {season_label}")
 st.markdown("SP+ ratings vs. consensus market spreads · Edge-based ATS picks")
 st.markdown("---")
 
