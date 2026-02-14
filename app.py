@@ -24,82 +24,86 @@ st.set_page_config(page_title="CFB Betting Model", page_icon="🏈", layout="wid
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;600&display=swap');
+
     html, body, [class*="css"] { font-family: 'IBM Plex Mono', monospace; }
     h1, h2, h3 { font-family: 'Bebas Neue', sans-serif; letter-spacing: 2px; }
-    .stApp { background-color: #0d0f14; color: #e2e8f0; }
-    section[data-testid="stSidebar"] { background-color: #13161e; border-right: 1px solid #1e2330; }
-    [data-testid="metric-container"] {
-        background: #13161e; border: 1px solid #1e2330;
-        border-radius: 8px; padding: 12px 16px;
+
+    /* Tabs */
+    .stTabs [data-baseweb="tab"] {
+        font-family: 'Bebas Neue', sans-serif; font-size: 16px;
+        letter-spacing: 1px; border-radius: 6px; padding: 8px 20px;
     }
-    thead tr th {
-        background-color: #1e2330 !important; color: #94a3b8 !important;
-        font-family: 'IBM Plex Mono', monospace !important;
-        font-size: 11px !important; letter-spacing: 1px;
-    }
-    div.stButton > button {
+
+    /* RUN MODEL button */
+    div.stButton > button[kind="primary"] {
         background: #22c55e; color: #0d0f14;
         font-family: 'Bebas Neue', sans-serif; font-size: 18px;
         letter-spacing: 2px; border: none; border-radius: 6px;
         padding: 10px 32px; width: 100%; transition: background 0.2s;
     }
-    div.stButton > button:hover { background: #16a34a; color: #fff; }
-    .stTabs [data-baseweb="tab-list"] { background: #13161e; border-radius: 8px; padding: 4px; gap: 4px; }
-    .stTabs [data-baseweb="tab"] {
-        font-family: 'Bebas Neue', sans-serif; font-size: 16px;
-        letter-spacing: 1px; color: #64748b; border-radius: 6px; padding: 8px 20px;
-    }
-    .stTabs [aria-selected="true"] { background: #1e2330 !important; color: #e2e8f0 !important; }
+    div.stButton > button[kind="primary"]:hover { background: #16a34a; color: #fff; }
 
-    /* Pick'em cards */
-    .pickem-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; margin-top: 12px; }
-    .pickem-card { background: #13161e; border: 1px solid #1e2330; border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; }
+    /* Pick'em grid */
+    .pickem-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+        gap: 14px; margin-top: 12px;
+    }
+    .pickem-card {
+        background: var(--background-color);
+        border: 1px solid var(--border-color);
+        border-radius: 10px; padding: 14px 16px;
+        display: flex; flex-direction: column; gap: 6px;
+    }
     .pickem-card.tier-A { border-left: 4px solid #22c55e; }
     .pickem-card.tier-B { border-left: 4px solid #facc15; }
     .pickem-card.tier-C { border-left: 4px solid #fb923c; }
-    .pickem-rank { font-family: 'Bebas Neue', sans-serif; font-size: 28px; color: #475569; line-height: 1; }
-    .pickem-matchup { font-size: 13px; color: #94a3b8; }
-    .pickem-pick { font-family: 'Bebas Neue', sans-serif; font-size: 20px; color: #e2e8f0; letter-spacing: 1px; }
-    .pickem-meta { font-size: 11px; color: #64748b; }
+    .pickem-rank { font-family: 'Bebas Neue', sans-serif; font-size: 28px; line-height: 1; opacity: 0.4; }
+    .pickem-matchup { font-size: 13px; opacity: 0.6; }
+    .pickem-pick { font-family: 'Bebas Neue', sans-serif; font-size: 20px; letter-spacing: 1px; }
+    .pickem-meta { font-size: 11px; opacity: 0.5; }
     .pickem-logos { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-    .pickem-vs { font-size: 11px; color: #475569; }
+    .pickem-vs { font-size: 11px; opacity: 0.4; }
 
     /* Parlay cards */
-    .parlay-card { background: #13161e; border: 1px solid #22c55e44; border-radius: 10px; padding: 16px 20px; margin-bottom: 14px; }
-    .parlay-title { font-family: 'Bebas Neue', sans-serif; font-size: 22px; color: #22c55e; letter-spacing: 1px; margin-bottom: 8px; }
-    .parlay-leg { font-size: 13px; color: #cbd5e1; padding: 4px 0; border-bottom: 1px solid #1e2330; }
+    .parlay-card {
+        background: var(--background-color);
+        border: 1px solid #22c55e44;
+        border-radius: 10px; padding: 16px 20px; margin-bottom: 14px;
+    }
+    .parlay-title {
+        font-family: 'Bebas Neue', sans-serif; font-size: 22px;
+        color: #22c55e; letter-spacing: 1px; margin-bottom: 8px;
+    }
+    .parlay-leg { font-size: 13px; padding: 4px 0; border-bottom: 1px solid rgba(128,128,128,0.15); }
     .parlay-leg:last-child { border-bottom: none; }
     .parlay-prob { font-family: 'Bebas Neue', sans-serif; font-size: 18px; color: #facc15; margin-top: 10px; }
 
     /* +/- leg counter */
-    .leg-display {
-        font-family: 'Bebas Neue', sans-serif; font-size: 52px;
-        color: #22c55e; line-height: 1; text-align: center;
-    }
-    .leg-label { font-size: 11px; color: #64748b; letter-spacing: 1px; text-align: center; margin-top: 2px; }
-    div[data-testid="column"] button[kind="secondary"] {
-        background: #1e2330 !important; color: #e2e8f0 !important;
-        font-family: 'Bebas Neue', sans-serif !important;
-        font-size: 28px !important; border: 1px solid #334155 !important;
-        border-radius: 8px !important; padding: 4px 20px !important;
-        width: 100% !important;
-    }
-    div[data-testid="column"] button[kind="secondary"]:hover {
-        background: #334155 !important; color: #fff !important;
-    }
+    .leg-display { font-family: 'Bebas Neue', sans-serif; font-size: 52px; color: #22c55e; line-height: 1; text-align: center; }
+    .leg-label { font-size: 11px; opacity: 0.5; letter-spacing: 1px; text-align: center; margin-top: 2px; }
 
-    /* Futures cards */
-    .futures-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-top: 12px; }
-    .futures-card { background: #13161e; border: 1px solid #1e2330; border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 6px; }
+    /* Championship/futures cards */
+    .futures-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 12px; margin-top: 12px;
+    }
+    .futures-card {
+        background: var(--background-color);
+        border: 1px solid var(--border-color);
+        border-radius: 10px; padding: 16px;
+        display: flex; flex-direction: column; gap: 6px;
+    }
     .futures-card.rank-1 { border-left: 4px solid #f59e0b; }
     .futures-card.rank-2 { border-left: 4px solid #94a3b8; }
     .futures-card.rank-3 { border-left: 4px solid #b45309; }
-    .futures-card.rank-other { border-left: 4px solid #1e2330; }
-    .futures-rank { font-family: 'Bebas Neue', sans-serif; font-size: 26px; color: #475569; line-height: 1; }
-    .futures-name { font-family: 'Bebas Neue', sans-serif; font-size: 20px; color: #e2e8f0; letter-spacing: 1px; }
-    .futures-team { font-size: 12px; color: #94a3b8; }
+    .futures-card.rank-other { border-left: 4px solid rgba(128,128,128,0.2); }
+    .futures-rank { font-family: 'Bebas Neue', sans-serif; font-size: 26px; line-height: 1; opacity: 0.4; }
+    .futures-name { font-family: 'Bebas Neue', sans-serif; font-size: 20px; letter-spacing: 1px; }
+    .futures-team { font-size: 12px; opacity: 0.6; }
     .futures-odds { font-family: 'Bebas Neue', sans-serif; font-size: 22px; color: #22c55e; }
-    .futures-implied { font-size: 11px; color: #64748b; }
+    .futures-implied { font-size: 11px; opacity: 0.5; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -120,7 +124,6 @@ SPREAD_STD_DEV    = 13.0
 EDGE_THRESHOLD    = 2.0
 COVER_PROB_THRESH = 0.55
 PROVIDER          = "consensus"
-SEASON_TYPE       = "regular"
 
 
 # ── session state defaults ────────────────────────────────────────────────────
@@ -142,14 +145,31 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### Season")
     year = st.number_input("Year", min_value=2000, max_value=2030, value=default_year, step=1)
-    week = st.number_input("Week", min_value=1,    max_value=20,   value=default_week, step=1)
+    season_type = st.radio(
+        "Season Type",
+        options=["regular", "postseason"],
+        format_func=lambda x: "Regular Season" if x == "regular" else "Postseason / Bowls",
+        horizontal=True,
+    )
+    week = st.number_input(
+        "Week",
+        min_value=1, max_value=20,
+        value=default_week if season_type == "regular" else 1,
+        step=1,
+        help="Postseason: Week 1 = early bowls, Week 2 = CFP quarters, Week 3 = CFP semis, Week 4 = National Championship",
+    )
     st.markdown("### Model")
-    home_field = st.number_input("Home Field Advantage (pts)", min_value=0.0, max_value=10.0, value=2.5, step=0.5, help="Suggested: 2.5 pts")
+    home_field = st.number_input(
+        "Home Field Advantage (pts)",
+        min_value=0.0, max_value=10.0, value=2.5, step=0.5,
+        help="Suggested: 2.5 pts. Bowl games are often neutral site — consider setting to 0.",
+    )
     run_btn = st.button("RUN MODEL")
 
 
 # ── header ────────────────────────────────────────────────────────────────────
-st.markdown(f"# CFB BETTING MODEL — {year} WK {week}")
+season_label = f"WK {week}" if season_type == "regular" else f"POSTSEASON WK {week}"
+st.markdown(f"# CFB BETTING MODEL — {year} {season_label}")
 st.markdown("SP+ ratings vs. consensus market spreads · Edge-based ATS picks")
 st.markdown("---")
 
@@ -196,7 +216,7 @@ def get_sp_ratings(yr):
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def get_weekly_lines(yr, wk, stype):
-    cache_file = CACHE_DIR / f"lines_{yr}_wk{wk}.json"
+    cache_file = CACHE_DIR / f"lines_{yr}_{stype}_wk{wk}.json"
     if cache_file.exists():
         return json.loads(cache_file.read_text())
     with make_client() as client:
@@ -267,7 +287,7 @@ def build_picks(yr, wk, stype, hf, std, prov):
 # ── Fetch ─────────────────────────────────────────────────────────────────────
 with st.spinner("Fetching ratings, lines, and logos…"):
     try:
-        df    = build_picks(year, week, SEASON_TYPE, home_field, SPREAD_STD_DEV, PROVIDER)
+        df    = build_picks(year, week, season_type, home_field, SPREAD_STD_DEV, PROVIDER)
         logos = get_team_logos(year)
     except Exception as e:
         st.error(f"API error: {e}")
@@ -304,11 +324,10 @@ def logo_img(team, size=32):
 # ══════════════════════════════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════════════════════════════
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3 = st.tabs([
     "🏆  CBS Pick'em Top 12",
     "🎰  Team Parlays",
     "🥇  Championship Favorites",
-    "🏅  Heisman Favorites",
 ])
 
 
@@ -358,11 +377,11 @@ with tab1:
     dl1, dl2 = st.columns(2)
     with dl1:
         st.download_button("⬇️ All Games (CSV)", data=df.drop(columns=["pick_team"]).to_csv(index=False),
-                           file_name=f"all_games_{year}_wk{week}.csv", mime="text/csv")
+                           file_name=f"all_games_{year}_{season_type}_wk{week}.csv", mime="text/csv")
     with dl2:
         if not strong.empty:
             st.download_button("⬇️ Strong Picks (CSV)", data=strong.drop(columns=["pick_team"]).to_csv(index=False),
-                               file_name=f"strong_picks_{year}_wk{week}.csv", mime="text/csv")
+                               file_name=f"strong_picks_{year}_{season_type}_wk{week}.csv", mime="text/csv")
 
 
 # ── TAB 2: Parlays ────────────────────────────────────────────────────────────
@@ -477,7 +496,7 @@ with tab3:
             .reset_index(drop=True)
         )
 
-        top_n_champ = st.slider("Show top N teams", min_value=5, max_value=min(25, len(sp_df)), value=12, step=1, key="champ_slider")
+        top_n_champ   = 25
         display_champ = sp_df.head(top_n_champ)
 
         # SP+ range for normalizing the bar width
