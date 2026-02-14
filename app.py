@@ -144,26 +144,29 @@ with st.sidebar:
     st.markdown("# 🏈 CFB MODEL")
     st.markdown("---")
     st.markdown("### Season")
+
     year = st.number_input("Year", min_value=2000, max_value=2030, value=default_year, step=1)
-    season_type = st.radio(
-        "Season Type",
-        options=["regular", "postseason"],
-        format_func=lambda x: "Regular Season" if x == "regular" else "Postseason / Bowls",
-        horizontal=True,
-    )
+
     week = st.slider(
         "Week",
-        min_value=1, max_value=20,
-        value=default_week if season_type == "regular" else 1,
+        min_value=1,
+        max_value=20,
+        value=default_week,
         step=1,
-        help="Postseason: Week 1 = early bowls, Week 2 = CFP quarters, Week 3 = CFP semis, Week 4 = National Championship",
+        help="Weeks 1–14: Regular season · 15–20: Bowls / CFP",
     )
+
+    # auto-map season type
+    season_type = "regular" if week <= 14 else "postseason"
+    api_week    = week if week <= 14 else week - 14
+
     st.markdown("### Model")
     home_field = st.number_input(
         "Home Field Advantage (pts)",
         min_value=0.0, max_value=10.0, value=2.5, step=0.5,
         help="Suggested: 2.5 pts. Bowl games are often neutral site — consider setting to 0.",
     )
+
     run_btn = st.button("RUN MODEL")
 
 
