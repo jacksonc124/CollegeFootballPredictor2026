@@ -17,26 +17,6 @@ def get_current_cfb_week() -> tuple:
     return current_year, week
 
 
-# ── Week translation helpers ──────────────────────────────────────────────────
-# Weeks 1–15  → regular season, passed as-is
-# Weeks 16–20 → postseason, passed as week (display_week - 15) to the API
-POSTSEASON_START = 16
-
-def week_to_api_params(display_week: int) -> tuple:
-    """Returns (season_type, api_week) for a given display week."""
-    if display_week < POSTSEASON_START:
-        return "regular", display_week
-    return "postseason", display_week - POSTSEASON_START + 1
-
-def week_label(display_week: int) -> str:
-    if display_week < POSTSEASON_START:
-        return f"Week {display_week}"
-    ps_week = display_week - POSTSEASON_START + 1
-    labels = {1: "Bowls — Early", 2: "Bowls / CFP Quarters",
-              3: "CFP Semifinals", 4: "CFP National Championship", 5: "Bowls — Late"}
-    return f"Postseason · {labels.get(ps_week, f'Week {ps_week}')}"
-
-
 # ── page config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="CFB Gambling Model", page_icon="🏈", layout="wide")
 
@@ -164,42 +144,28 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### Season")
     year = st.number_input("Year", min_value=2000, max_value=2030, value=default_year, step=1)
-    display_week = st.slider(
-        "Week",
-        min_value=1, max_value=20,
-        value=default_week,
-        step=1,
-        help=(
-            "Weeks 1–15: Regular season  ·  "
-            "Week 16: Early bowls  ·  "
-            "Week 17: Bowl games / CFP quarters  ·  "
-            "Week 18: CFP semifinals  ·  "
-            "Week 19: CFP National Championship  ·  "
-            "Week 20: Late bowls"
-        ),
-    )
-
-    # Show human-readable label for selected week
-    st.caption(f"📅 {week_label(display_week)}")
+    postseason = st.checkbox("📬 Postseason / Bowl Games", value=False,
+                             help="Fetches all bowl & playoff games for the selected year, ignoring week.")
+    week = st.slider("Week", min_value=1, max_value=15, value=default_week, step=1,
+                     disabled=postseason)
 
     st.markdown("### Model")
-    # Suggest 0 home field for postseason (neutral sites)
-    default_hf = 0.0 if display_week >= POSTSEASON_START else 2.5
+    default_hf = 0.0 if postseason else 2.5
     home_field = st.number_input(
         "Home Field Advantage (pts)",
-        min_value=0.0, max_value=10.0,
-        value=default_hf,
-        step=0.5,
-        help="Suggested 2.5 for regular season. Most bowl/playoff games are neutral site — use 0.",
+        min_value=0.0, max_value=10.0, value=default_hf, step=0.5,
+        help="Bowl/playoff games are neutral site — 0 recommended.",
     )
     run_btn = st.button("RUN MODEL")
 
-# Translate display week → API params
-season_type, api_week = week_to_api_params(display_week)
+# Resolve API params from sidebar state
+season_type = "postseason" if postseason else "regular"
+api_week    = None if postseason else week
 
 
 # ── header ────────────────────────────────────────────────────────────────────
-st.markdown(f"# CFB — {year} · {week_label(display_week).upper()}")
+season_label = "POSTSEASON" if postseason else f"WK {week}"
+st.markdown(f"# CFB — {year} · {season_label}")
 st.markdown("SP+ ratings vs. consensus market spreads · Edge-based ATS picks")
 st.markdown("---")
 
@@ -247,11 +213,16 @@ def get_sp_ratings(yr):
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def get_weekly_lines(yr, wk, stype):
-    cache_file = CACHE_DIR / f"lines_{yr}_{stype}_wk{wk}.json"
+    # wk is None for postseason (fetch all bowl games at once)
+    wk_str     = "all" if wk is None else str(wk)
+    cache_file = CACHE_DIR / f"lines_{yr}_{stype}_wk{wk_str}.json"
     if cache_file.exists():
         return json.loads(cache_file.read_text())
     with make_client() as client:
-        games = cfbd.BettingApi(client).get_lines(year=yr, week=wk, season_type=stype)
+        kwargs = dict(year=yr, season_type=stype)
+        if wk is not None:
+            kwargs["week"] = wk
+        games = cfbd.BettingApi(client).get_lines(**kwargs)
     result = [{"home_team": g.home_team, "away_team": g.away_team,
                "lines": [{"provider": ln.provider, "spread": ln.spread} for ln in (g.lines or [])]}
               for g in games]
@@ -326,7 +297,7 @@ with st.spinner("Fetching ratings, lines, and logos…"):
         st.stop()
 
 if df.empty:
-    st.warning("No games returned for this week. Try a different week or year.")
+    st.warning("No games returned. Try a different year or toggle postseason.")
     st.stop()
 
 strong = df[
@@ -408,12 +379,14 @@ with tab1:
     st.markdown("---")
     dl1, dl2 = st.columns(2)
     with dl1:
+        fname = f"all_games_{year}_postseason" if postseason else f"all_games_{year}_wk{week}"
         st.download_button("⬇️ All Games (CSV)", data=df.drop(columns=["pick_team"]).to_csv(index=False),
-                           file_name=f"all_games_{year}_{season_type}_wk{api_week}.csv", mime="text/csv")
+                           file_name=f"{fname}.csv", mime="text/csv")
     with dl2:
         if not strong.empty:
+            fname2 = f"strong_picks_{year}_postseason" if postseason else f"strong_picks_{year}_wk{week}"
             st.download_button("⬇️ Strong Picks (CSV)", data=strong.drop(columns=["pick_team"]).to_csv(index=False),
-                               file_name=f"strong_picks_{year}_{season_type}_wk{api_week}.csv", mime="text/csv")
+                               file_name=f"{fname2}.csv", mime="text/csv")
 
 
 # ── TAB 2: Parlays ────────────────────────────────────────────────────────────
