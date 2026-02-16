@@ -83,7 +83,7 @@ st.markdown("""
     .leg-display { font-family: 'Bebas Neue', sans-serif; font-size: 52px; color: #22c55e; line-height: 1; text-align: center; }
     .leg-label { font-size: 11px; opacity: 0.5; letter-spacing: 1px; text-align: center; margin-top: 2px; }
 
-    /* Championship / Heisman cards */
+    /* Championship/futures cards */
     .futures-grid {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -102,11 +102,8 @@ st.markdown("""
     .futures-rank { font-family: 'Bebas Neue', sans-serif; font-size: 26px; line-height: 1; opacity: 0.4; }
     .futures-name { font-family: 'Bebas Neue', sans-serif; font-size: 20px; letter-spacing: 1px; }
     .futures-team { font-size: 12px; opacity: 0.6; }
-    .futures-score { font-family: 'Bebas Neue', sans-serif; font-size: 22px; color: #22c55e; }
-    .futures-label { font-size: 11px; opacity: 0.5; }
-    .heisman-stat { font-size: 11px; opacity: 0.6; line-height: 1.6; }
-    .heisman-bar-bg { margin-top: 6px; background: rgba(128,128,128,0.15); border-radius: 4px; height: 4px; width: 100%; }
-    .heisman-bar-fill { border-radius: 4px; height: 4px; }
+    .futures-odds { font-family: 'Bebas Neue', sans-serif; font-size: 22px; color: #22c55e; }
+    .futures-implied { font-size: 11px; opacity: 0.5; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -159,7 +156,7 @@ with st.sidebar:
         min_value=1, max_value=20,
         value=default_week if season_type == "regular" else 1,
         step=1,
-        help="Postseason: Week 1 = early bowls · Week 2 = CFP quarters · Week 3 = CFP semis · Week 4 = National Championship",
+        help="Postseason: Week 1 = early bowls, Week 2 = CFP quarters, Week 3 = CFP semis, Week 4 = National Championship",
     )
     st.markdown("### Model")
     home_field = st.number_input(
@@ -217,7 +214,6 @@ def get_sp_ratings(yr):
     cache_file.write_text(json.dumps(ratings))
     return ratings
 
-
 @st.cache_data(show_spinner=False, ttl=3600)
 def get_weekly_lines(yr, wk, stype):
     cache_file = CACHE_DIR / f"lines_{yr}_{stype}_wk{wk}.json"
@@ -230,7 +226,6 @@ def get_weekly_lines(yr, wk, stype):
               for g in games]
     cache_file.write_text(json.dumps(result))
     return result
-
 
 @st.cache_data(show_spinner=False, ttl=86400)
 def get_team_logos(yr):
@@ -247,72 +242,6 @@ def get_team_logos(yr):
         pass
     cache_file.write_text(json.dumps(logos))
     return logos
-
-
-@st.cache_data(show_spinner=False, ttl=3600)
-def get_player_stats(yr: int, wk: int) -> pd.DataFrame:
-    """
-    Pull cumulative season player stats through wk from CFBD.
-    Tries both old and new attribute naming conventions.
-    Returns one row per player with passing/rushing/receiving totals.
-    """
-    cache_file = CACHE_DIR / f"player_stats_{yr}_wk{wk}.json"
-    if cache_file.exists():
-        try:
-            return pd.read_json(cache_file)
-        except Exception:
-            cache_file.unlink()  # corrupt — delete and re-fetch
-
-    categories = ["passing", "rushing", "receiving"]
-    player_map = {}  # key: (pid, name, team)
-
-    with make_client() as client:
-        players_api = cfbd.PlayersApi(client)
-        for cat in categories:
-            try:
-                stats = players_api.get_player_season_stats(
-                    year=yr,
-                    end_week=wk,
-                    season_type="regular",
-                    category=cat,
-                )
-            except Exception:
-                continue
-
-            for s in stats:
-                pid   = getattr(s, "player_id", None) or getattr(s, "id", None)
-                name  = getattr(s, "player",    "") or getattr(s, "name", "")
-                team  = getattr(s, "team",       "")
-                stype = getattr(s, "stat_type",  "") or getattr(s, "type", "")
-                val   = float(getattr(s, "stat", 0) or 0)
-
-                key = (pid, name, team)
-                if key not in player_map:
-                    player_map[key] = {
-                        "name": name, "team": team,
-                        "pass_yds": 0, "pass_td": 0,
-                        "rush_yds": 0, "rush_td": 0,
-                        "rec_yds":  0, "rec_td":  0,
-                    }
-
-                field = {
-                    ("passing",   "YDS"): "pass_yds",
-                    ("passing",   "TD"):  "pass_td",
-                    ("rushing",   "YDS"): "rush_yds",
-                    ("rushing",   "TD"):  "rush_td",
-                    ("receiving", "YDS"): "rec_yds",
-                    ("receiving", "TD"):  "rec_td",
-                }.get((cat, stype))
-
-                if field:
-                    player_map[key][field] += val
-
-    if not player_map:
-        return pd.DataFrame()
-
-    df_out = pd.DataFrame(list(player_map.values()))
-    df_out.to_json(cache_file)
-    return df_out
 
 
 # ── Model ─────────────────────────────────────────────────────────────────────
@@ -389,17 +318,16 @@ def logo_img(team, size=32):
     if url:
         return f'<img src="{url}" width="{size}" height="{size}" style="object-fit:contain;vertical-align:middle;" />'
     initials = "".join(w[0] for w in team.split()[:2]).upper()
-    return f'<span style="font-family:\'Bebas Neue\',sans-serif;font-size:{size//2}px;opacity:0.4;">{initials}</span>'
+    return f'<span style="font-family:\'Bebas Neue\',sans-serif;font-size:{size//2}px;color:#64748b;">{initials}</span>'
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════════════════════════════
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3 = st.tabs([
     "🏆  CBS Pick'em Top 12",
     "🎰  Team Parlays",
     "🥇  Championship Favorites",
-    "🏅  Heisman Leaderboard",
 ])
 
 
@@ -417,7 +345,7 @@ with tab1:
     else:
         cards_html = '<div class="pickem-grid">'
         for i, row in top12.iterrows():
-            tier, home, away       = row["Tier"], row["Home"], row["Away"]
+            tier, home, away      = row["Tier"], row["Home"], row["Away"]
             pick_team, cover, edge = row["pick_team"], row["Cover Prob"], row["Edge (pts)"]
             spread                 = row["Market Spread"]
             spread_str = f"Spread: {spread:+.1f}" if spread else ""
@@ -428,9 +356,9 @@ with tab1:
                 f'<div class="pickem-matchup">{away} @ {home}</div>'
                 f'<div class="pickem-pick">&#10003; {pick_team}</div>'
                 f'<div class="pickem-meta">'
-                f'Cover Prob: <b>{cover:.1%}</b> &nbsp;|&nbsp; '
-                f'Edge: <b>{edge:+.1f} pts</b> &nbsp;|&nbsp; '
-                f'Tier: <b>{tier}</b>'
+                f'Cover Prob: <b style="color:#e2e8f0">{cover:.1%}</b> &nbsp;|&nbsp; '
+                f'Edge: <b style="color:#e2e8f0">{edge:+.1f} pts</b> &nbsp;|&nbsp; '
+                f'Tier: <b style="color:#e2e8f0">{tier}</b>'
                 f'{"<br/>" + spread_str if spread_str else ""}'
                 f'</div></div>'
             )
@@ -462,6 +390,7 @@ def render_parlay_tab(df_inner, logos_inner):
     st.markdown("## 🎰 Team Parlays")
     st.caption("Built from Tier A & B picks · Combined prob = product of cover probs · Est. payout assumes −110 per leg")
 
+    # Callbacks defined inside fragment so they trigger a fragment-only rerun
     def dec_legs():
         if st.session_state["parlay_legs"] > 2:
             st.session_state["parlay_legs"] -= 1
@@ -470,10 +399,15 @@ def render_parlay_tab(df_inner, logos_inner):
         if st.session_state["parlay_legs"] < 6:
             st.session_state["parlay_legs"] += 1
 
+    # +/- counter — narrow columns so buttons sit tight around the number
     col_minus, col_display, col_plus = st.columns([1, 1, 1])
     with col_minus:
-        st.button("−", key="legs_minus", on_click=dec_legs,
-                  use_container_width=True, disabled=(st.session_state["parlay_legs"] <= 2))
+        st.button(
+            "−", key="legs_minus",
+            on_click=dec_legs,
+            use_container_width=True,
+            disabled=(st.session_state["parlay_legs"] <= 2),
+        )
     with col_display:
         st.markdown(
             f'<div class="leg-display">{st.session_state["parlay_legs"]}</div>'
@@ -481,8 +415,12 @@ def render_parlay_tab(df_inner, logos_inner):
             unsafe_allow_html=True,
         )
     with col_plus:
-        st.button("+", key="legs_plus", on_click=inc_legs,
-                  use_container_width=True, disabled=(st.session_state["parlay_legs"] >= 6))
+        st.button("＋",
+         key="legs_plus",
+            on_click=inc_legs,
+            use_container_width=True,
+            disabled=(st.session_state["parlay_legs"] >= 6),
+        )
 
     leg_count = st.session_state["parlay_legs"]
     pool_size = leg_count + 4
@@ -511,12 +449,14 @@ def render_parlay_tab(df_inner, logos_inner):
         legs_html = ""
         for _, leg in p["legs"].iterrows():
             lm = logos_inner.get(leg["pick_team"], "")
-            logo_tag = (f'<img src="{lm}" width="20" height="20" style="object-fit:contain;vertical-align:middle;" />'
-                        if lm else "")
+            logo_tag = (
+                f'<img src="{lm}" width="20" height="20" style="object-fit:contain;vertical-align:middle;" />'
+                if lm else ""
+            )
             legs_html += (
                 f'<div class="parlay-leg">'
                 f'{logo_tag}&nbsp;<b>{leg["pick_team"]}</b> ATS'
-                f'&nbsp;<span style="opacity:0.5">({leg["Away"]} @ {leg["Home"]})</span>'
+                f'&nbsp;<span style="color:#64748b">({leg["Away"]} @ {leg["Home"]})</span>'
                 f'&nbsp;&middot;&nbsp;Cover Prob: <b style="color:#facc15">{leg["Cover Prob"]:.1%}</b>'
                 f'&nbsp;&middot;&nbsp;Edge: <b>{leg["Edge (pts)"]:+.1f} pts</b>'
                 f'&nbsp;&middot;&nbsp;Tier {leg["Tier"]}'
@@ -525,7 +465,7 @@ def render_parlay_tab(df_inner, logos_inner):
         all_html += (
             f'<div class="parlay-card">'
             f'<div class="parlay-title">Parlay #{i + 1}'
-            f'&nbsp;<span style="font-size:14px;opacity:0.5;font-family:\'IBM Plex Mono\',monospace;">'
+            f'&nbsp;<span style="font-size:14px;color:#64748b;font-family:\'IBM Plex Mono\',monospace;">'
             f'{leg_count}-leg</span></div>'
             f'{legs_html}'
             f'<div class="parlay-prob">'
@@ -540,30 +480,34 @@ with tab2:
     render_parlay_tab(df, logos)
 
 
-# ── TAB 3: Championship Favorites ─────────────────────────────────────────────
+# ── TAB 3: Championship Futures ───────────────────────────────────────────────
 with tab3:
     st.markdown("## 🥇 National Championship Favorites")
-    st.caption(f"Based on SP+ ratings · {year} season · Higher rating = stronger team")
+    st.caption(f"Based on SP+ ratings through Week {week} · {year} season · Higher rating = stronger team")
 
     sp_ratings = get_sp_ratings(year)
 
     if not sp_ratings:
-        st.warning("No SP+ ratings found for this year.")
+        st.warning("No SP+ ratings found for this year/week combination.")
     else:
         sp_df = (
             pd.DataFrame(list(sp_ratings.items()), columns=["Team", "SP+ Rating"])
             .sort_values("SP+ Rating", ascending=False)
             .reset_index(drop=True)
         )
-        display_champ = sp_df.head(25)
+
+        top_n_champ   = 25
+        display_champ = sp_df.head(top_n_champ)
+
+        # SP+ range for normalizing the bar width
         sp_max = display_champ["SP+ Rating"].max()
         sp_min = display_champ["SP+ Rating"].min()
 
         cards_html = '<div class="futures-grid">'
         for i, row in display_champ.iterrows():
-            rank       = i + 1
-            team       = row["Team"]
-            rating     = row["SP+ Rating"]
+            rank      = i + 1
+            team      = row["Team"]
+            rating    = row["SP+ Rating"]
             rank_class = {1: "rank-1", 2: "rank-2", 3: "rank-3"}.get(rank, "rank-other")
             medal      = {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"#{rank}")
             logo_tag   = logo_img(team, 40)
@@ -573,100 +517,86 @@ with tab3:
                 f'<div class="futures-rank">{medal}</div>'
                 f'{logo_tag}'
                 f'<div class="futures-name">{team}</div>'
-                f'<div class="futures-score">{rating:+.1f}</div>'
-                f'<div class="futures-label">SP+ Rating</div>'
-                f'<div class="heisman-bar-bg">'
-                f'<div class="heisman-bar-fill" style="background:#22c55e;width:{bar_pct}%;"></div>'
+                f'<div class="futures-odds" style="font-size:20px;">{rating:+.1f}</div>'
+                f'<div class="futures-implied">SP+ Rating</div>'
+                f'<div style="margin-top:6px;background:#1e2330;border-radius:4px;height:4px;width:100%;">'
+                f'<div style="background:#22c55e;border-radius:4px;height:4px;width:{bar_pct}%;"></div>'
                 f'</div>'
                 f'</div>'
             )
         cards_html += "</div>"
         st.markdown(cards_html, unsafe_allow_html=True)
 
+        # st.markdown("---")
+        # st.dataframe(
+        #     display_champ.rename(columns={"SP+ Rating": "SP+ Rating (higher = better)"}).reset_index(drop=True),
+        #     use_container_width=True, hide_index=True
+        # )
 
-# ── TAB 4: Heisman Leaderboard ────────────────────────────────────────────────
-with tab4:
-    st.markdown("## 🏅 Heisman Trophy Leaderboard")
-    st.caption(f"Model score through Week {week} · {year} regular season · Weighted: passing + rushing + receiving production")
 
-    if st.button("🔄 Clear cached stats & reload", key="clear_heisman"):
-        cache_file = CACHE_DIR / f"player_stats_{year}_wk{week}.json"
-        if cache_file.exists():
-            cache_file.unlink()
-        st.cache_data.clear()
-        st.rerun()
-
-    with st.spinner("Fetching player stats…"):
+# ── Heisman player stats fetcher ──────────────────────────────────────────────
+@st.cache_data(show_spinner=False, ttl=3600)
+def get_player_stats(yr: int, wk: int) -> pd.DataFrame:
+    """
+    Pull cumulative season player stats through `wk` from CFBD.
+    Returns a DataFrame with one row per player.
+    """
+    cache_file = CACHE_DIR / f"player_stats_{yr}_wk{wk}.json"
+    if cache_file.exists():
         try:
-            pstats = get_player_stats(year, week)
-        except Exception as e:
-            pstats = pd.DataFrame()
-            st.error(f"Could not fetch player stats: {e}")
+            return pd.read_json(cache_file)
+        except Exception:
+            cache_file.unlink()   # corrupt cache — delete and re-fetch
 
-    if pstats.empty:
-        st.warning(f"No player stats returned from CFBD for {year} through week {week}.")
-        st.info("Try a past season — e.g. 2022 week 10 — to verify the connection is working.")
-    else:
-        # Heisman score formula
-        pstats["heisman_score"] = (
-              pstats["pass_yds"] * 0.3
-            + pstats["pass_td"]  * 15
-            + pstats["rush_yds"] * 0.5
-            + pstats["rush_td"]  * 20
-            + pstats["rec_yds"]  * 0.5
-            + pstats["rec_td"]   * 20
-        ).round(1)
+    categories  = ["passing", "rushing", "receiving"]
+    player_map  = {}   # keyed by (player_id, name, team)
 
-        heisman_df = (
-            pstats[pstats["heisman_score"] > 50]
-            .sort_values("heisman_score", ascending=False)
-            .reset_index(drop=True)
-        )
-
-        if heisman_df.empty:
-            st.info("Not enough data yet — check back after a few weeks of the season.")
-        else:
-            top_n_h   = st.slider("Show top N players", min_value=5, max_value=min(25, len(heisman_df)), value=12, step=1, key="heisman_slider")
-            display_h = heisman_df.head(top_n_h)
-            s_max     = display_h["heisman_score"].max()
-            s_min     = display_h["heisman_score"].min()
-
-            cards_html = '<div class="futures-grid">'
-            for i, row in display_h.iterrows():
-                rank       = i + 1
-                rank_class = {1: "rank-1", 2: "rank-2", 3: "rank-3"}.get(rank, "rank-other")
-                medal      = {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"#{rank}")
-                team       = row["team"]
-                logo_tag   = logo_img(team, 36)
-                bar_pct    = int((row["heisman_score"] - s_min) / (s_max - s_min + 0.001) * 100) if s_max != s_min else 80
-
-                stat_lines = []
-                if row["pass_yds"] > 0:
-                    stat_lines.append(f'{int(row["pass_yds"])} pass yds / {int(row["pass_td"])} TD')
-                if row["rush_yds"] > 0:
-                    stat_lines.append(f'{int(row["rush_yds"])} rush yds / {int(row["rush_td"])} TD')
-                if row["rec_yds"] > 0:
-                    stat_lines.append(f'{int(row["rec_yds"])} rec yds / {int(row["rec_td"])} TD')
-                stats_html = "".join(f'<div class="heisman-stat">{s}</div>' for s in stat_lines)
-
-                cards_html += (
-                    f'<div class="futures-card {rank_class}">'
-                    f'<div class="futures-rank">{medal}</div>'
-                    f'{logo_tag}'
-                    f'<div class="futures-name">{row["name"]}</div>'
-                    f'<div class="futures-team">{team}</div>'
-                    f'<div class="futures-score">{row["heisman_score"]:.0f}</div>'
-                    f'<div class="futures-label">Heisman Score</div>'
-                    f'{stats_html}'
-                    f'<div class="heisman-bar-bg">'
-                    f'<div class="heisman-bar-fill" style="background:#facc15;width:{bar_pct}%;"></div>'
-                    f'</div>'
-                    f'</div>'
+    with make_client() as client:
+        players_api = cfbd.PlayersApi(client)
+        for cat in categories:
+            try:
+                stats = players_api.get_player_season_stats(
+                    year=yr,
+                    end_week=wk,
+                    season_type="regular",
+                    category=cat,
                 )
-            cards_html += "</div>"
-            st.markdown(cards_html, unsafe_allow_html=True)
+            except Exception:
+                continue
 
-            st.markdown("---")
-            table_df = display_h[["name","team","pass_yds","pass_td","rush_yds","rush_td","rec_yds","rec_td","heisman_score"]].copy()
-            table_df.columns = ["Player","Team","Pass Yds","Pass TD","Rush Yds","Rush TD","Rec Yds","Rec TD","Score"]
-            st.dataframe(table_df.reset_index(drop=True), use_container_width=True, hide_index=True)
+            for s in stats:
+                # Newer cfbd library uses snake_case attributes
+                pid   = getattr(s, "player_id",  None) or getattr(s, "id", None)
+                name  = getattr(s, "player",     "") or getattr(s, "name", "")
+                team  = getattr(s, "team",        "")
+                stype = getattr(s, "stat_type",   "") or getattr(s, "type", "")
+                val   = float(getattr(s, "stat",  0) or 0)
+
+                key = (pid, name, team)
+                if key not in player_map:
+                    player_map[key] = {
+                        "name": name, "team": team,
+                        "pass_yds": 0, "pass_td": 0,
+                        "rush_yds": 0, "rush_td": 0,
+                        "rec_yds":  0, "rec_td":  0,
+                    }
+
+                # Map stat_type string → field
+                field = {
+                    ("passing",   "YDS"): "pass_yds",
+                    ("passing",   "TD"):  "pass_td",
+                    ("rushing",   "YDS"): "rush_yds",
+                    ("rushing",   "TD"):  "rush_td",
+                    ("receiving", "YDS"): "rec_yds",
+                    ("receiving", "TD"):  "rec_td",
+                }.get((cat, stype))
+
+                if field:
+                    player_map[key][field] += val
+
+    if not player_map:
+        return pd.DataFrame()
+
+    df_out = pd.DataFrame(list(player_map.values()))
+    df_out.to_json(cache_file)
+    return df_out
