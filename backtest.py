@@ -70,7 +70,8 @@ def backtest_week(bearer_token: str, year: int, week: int, season_type: str = "r
     """Build picks for a past week and grade each one against the actual final score."""
     ratings = model.get_sp_ratings(bearer_token, year)
     games = model.get_weekly_lines(bearer_token, year, week, season_type)
-    picks = model.build_picks(ratings, games, home_field=home_field)
+    game_info = model.get_game_info(bearer_token, year, week, season_type)
+    picks = model.build_picks(ratings, games, home_field=home_field, game_info=game_info)
     results = get_actual_results(bearer_token, year, week, season_type)
 
     outcomes = []

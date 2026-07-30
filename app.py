@@ -111,7 +111,7 @@ DISPLAY_COLUMNS = {
     "sp_home_rating": "SP+ Home", "sp_away_rating": "SP+ Away",
     "model_spread_home": "Model Spread", "market_spread_home": "Market Spread",
     "edge_points": "Edge (pts)", "cover_prob": "Cover Prob", "tier": "Tier",
-    "model_pick": "Pick",
+    "model_pick": "Pick", "neutral_site": "Neutral Site", "game_notes": "Game",
 }
 
 
@@ -135,18 +135,20 @@ with st.sidebar:
     st.markdown("### Season")
     year = st.number_input("Year", min_value=2000, max_value=2030, value=default_year, step=1)
     postseason = st.checkbox("📬 Postseason / Bowl Games", value=False,
-                             help="Fetches all bowl & playoff games for the selected year, ignoring week.")
+                             help="Fetches every bowl & CFP game for the selected year, ignoring week. "
+                                  "CFBD groups all of them under one 'week', so the week selector doesn't apply here.")
     week = st.slider("Week", min_value=1, max_value=15, value=default_week, step=1,
                      disabled=postseason)
 
     st.markdown("### Model")
-    default_hf = 0.0 if postseason else model.DEFAULT_HOME_FIELD
     home_field = st.number_input(
         "Home Field Advantage (pts)",
-        min_value=0.0, max_value=10.0, value=default_hf, step=0.5,
-        help="Bowl/playoff games are neutral site — 0 recommended.",
+        min_value=0.0, max_value=10.0, value=model.DEFAULT_HOME_FIELD, step=0.5,
+        help="Applied only to true home games. Neutral-site games (most bowls, CFP quarterfinals/"
+             "semifinals/championship) automatically get 0 — detected per-game from CFBD, not guessed "
+             "from the postseason toggle. CFP first-round games are true home games for the higher seed, "
+             "so they still get this value.",
     )
-    run_btn = st.button("RUN MODEL")
 
 # Resolve API params from sidebar state
 season_type = "postseason" if postseason else "regular"
@@ -158,10 +160,6 @@ season_label = "POSTSEASON" if postseason else f"WK {week}"
 st.markdown(f"# CFB — {year} · {season_label}")
 st.markdown("SP+ ratings vs. consensus market spreads · Edge-based ATS picks")
 st.markdown("---")
-
-if not run_btn:
-    st.info("Configure parameters in the sidebar, then press **RUN MODEL**.")
-    st.stop()
 
 if not bearer_token:
     st.error("No Bearer Token found. Set BEARER_TOKEN in Streamlit secrets.")
@@ -185,6 +183,11 @@ def get_weekly_lines(yr, wk, stype):
     return model.get_weekly_lines(bearer_token, yr, wk, stype)
 
 
+@st.cache_data(show_spinner=False, ttl=3600)
+def get_game_info(yr, wk, stype):
+    return model.get_game_info(bearer_token, yr, wk, stype)
+
+
 @st.cache_data(show_spinner=False, ttl=86400)
 def get_team_logos(yr):
     return model.get_team_logos(bearer_token, yr)
@@ -193,10 +196,12 @@ def get_team_logos(yr):
 # ── Fetch ─────────────────────────────────────────────────────────────────────
 with st.spinner("Fetching ratings, lines, and logos…"):
     try:
-        ratings = get_sp_ratings(year)
-        games   = get_weekly_lines(year, api_week, season_type)
-        df      = model.build_picks(ratings, games, model.DEFAULT_PROVIDER, home_field, model.SPREAD_STD_DEV)
-        logos   = get_team_logos(year)
+        ratings   = get_sp_ratings(year)
+        games     = get_weekly_lines(year, api_week, season_type)
+        game_info = get_game_info(year, api_week, season_type)
+        df        = model.build_picks(ratings, games, model.DEFAULT_PROVIDER, home_field, model.SPREAD_STD_DEV,
+                                       game_info=game_info)
+        logos     = get_team_logos(year)
     except Exception as e:
         st.error(f"API error: {e}")
         st.stop()
@@ -252,7 +257,10 @@ with tab1:
             tier, home, away       = row["tier"], row["home_team"], row["away_team"]
             pick_team, cover, edge = row["pick_team"], row["cover_prob"], row["edge_points"]
             spread                 = row["market_spread_home"]
+            neutral_site, notes    = row.get("neutral_site"), row.get("game_notes") or ""
             spread_str = f"Spread: {spread:+.1f}" if spread is not None else ""
+            site_str = "" if neutral_site is None else ("🏟 Neutral Site" if neutral_site else "🏠 Home Game")
+            note_str = f"<br/>{notes}" if notes else ""
             cards_html += (
                 f'<div class="pickem-card tier-{tier}">'
                 f'<div class="pickem-rank">#{i + 1}</div>'
@@ -264,6 +272,8 @@ with tab1:
                 f'Edge: <b>{edge:+.1f} pts</b> &nbsp;|&nbsp; '
                 f'Tier: <b>{tier}</b>'
                 f'{"<br/>" + spread_str if spread_str else ""}'
+                f'{"<br/>" + site_str if site_str else ""}'
+                f'{note_str}'
                 f'</div></div>'
             )
         cards_html += "</div>"

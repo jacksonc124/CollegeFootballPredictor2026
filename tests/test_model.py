@@ -79,6 +79,33 @@ def test_build_picks_skips_games_missing_ratings_or_spread():
     assert df.iloc[0]["home_team"] == "Home U"
 
 
+def test_build_picks_zeroes_home_field_for_neutral_site_games():
+    # Equal ratings and a pick'em market line isolate the effect of home_field alone.
+    ratings = {"Home U": 10.0, "Away U": 10.0}
+    games = [{"home_team": "Home U", "away_team": "Away U", "lines": [{"provider": "consensus", "spread": 0.0}]}]
+
+    neutral_df = model.build_picks(ratings, games, home_field=2.5,
+                                    game_info={("Home U", "Away U"): {"neutral_site": True, "notes": "Bowl"}})
+    home_df = model.build_picks(ratings, games, home_field=2.5,
+                                 game_info={("Home U", "Away U"): {"neutral_site": False, "notes": "CFP First Round"}})
+    no_info_df = model.build_picks(ratings, games, home_field=2.5)
+
+    # Neutral site: home_field is zeroed out -> model_spread_home = 0, matches the pick'em market -> NO EDGE.
+    assert neutral_df.iloc[0]["model_spread_home"] == 0.0
+    assert neutral_df.iloc[0]["model_pick"] == "NO EDGE"
+    assert neutral_df.iloc[0]["neutral_site"] == True  # noqa: E712 (numpy bool from the DataFrame)
+
+    # True home game (e.g. CFP first round): home_field applies -> model favors home over the pick'em market.
+    assert home_df.iloc[0]["model_spread_home"] == 2.5
+    assert home_df.iloc[0]["pick_team"] == "Home U"
+    assert home_df.iloc[0]["neutral_site"] == False  # noqa: E712 (numpy bool from the DataFrame)
+    assert home_df.iloc[0]["game_notes"] == "CFP First Round"
+
+    # No game_info available: falls back to the flat home_field value, same as the true-home-game case.
+    assert no_info_df.iloc[0]["model_spread_home"] == 2.5
+    assert no_info_df.iloc[0]["neutral_site"] is None
+
+
 def test_build_picks_empty_games_returns_empty_dataframe():
     df = model.build_picks({}, [])
     assert df.empty

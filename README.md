@@ -17,11 +17,18 @@ This script builds weekly college football against-the-spread (ATS) picks by com
 - pandas
 - streamlit (for the `app.py` dashboard)
 
-Install dependencies:
+Install dependencies (in a virtual environment — see note below):
 
 ```bash
+python -m venv .venv
+.venv\Scripts\activate   # or: source .venv/bin/activate on macOS/Linux
 pip install -r requirements.txt
 ```
+
+> **Use a virtual environment.** The `cfbd` package requires `pydantic<2`, which will
+> conflict with (and silently downgrade) a global environment that has `pydantic>=2`
+> installed for other tools — breaking them. A project-local `.venv` keeps `cfbd`'s
+> pydantic 1.x install isolated from everything else on your machine.
 
 You'll also need a CFBD API bearer token (get one at [collegefootballdata.com](https://collegefootballdata.com/key)):
 

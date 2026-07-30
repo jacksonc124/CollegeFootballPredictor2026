@@ -90,6 +90,43 @@ def get_weekly_lines(bearer_token: str, year: int, week: int | None, season_type
     return result
 
 
+def get_game_info(bearer_token: str, year: int, week: int | None, season_type: str,
+                   cache_dir: Path = CACHE_DIR) -> dict:
+    """
+    Pull scheduling metadata (neutral site, round/bowl name) for FBS games from the Games API.
+
+    Betting lines alone don't say whether a game is at a neutral site. This matters most
+    in the postseason: CFBD lumps every postseason FBS game — bowls *and* all four rounds
+    of the CFP — under a single week=1, but they aren't all neutral. Bowl games and CFP
+    quarterfinals/semifinals/the championship are neutral-site; CFP first-round games are
+    played at the higher seed's campus stadium (neutral_site=False), so the home team
+    should still get home-field advantage there. Returns
+    {(home_team, away_team): {"neutral_site": bool, "notes": str}}.
+    """
+    import cfbd
+
+    wk_str = "all" if week is None else str(week)
+    cache_file = cache_path(f"games_{year}_{season_type}_wk{wk_str}.json", cache_dir=cache_dir)
+    if cache_file.exists():
+        raw = json.loads(cache_file.read_text())
+        return {tuple(k.split("||", 1)): v for k, v in raw.items()}
+
+    with make_client(bearer_token) as client:
+        kwargs = dict(year=year, season_type=season_type, classification="fbs")
+        if week is not None:
+            kwargs["week"] = week
+        games = cfbd.GamesApi(client).get_games(**kwargs)
+
+    info = {
+        (g.home_team, g.away_team): {"neutral_site": bool(g.neutral_site), "notes": g.notes or ""}
+        for g in games
+    }
+
+    serializable = {f"{h}||{a}": v for (h, a), v in info.items()}
+    cache_file.write_text(json.dumps(serializable))
+    return info
+
+
 def get_team_logos(bearer_token: str, year: int, cache_dir: Path = CACHE_DIR) -> dict:
     """Pull team logo URLs. Returns {school_name: logo_url}. Non-fatal on failure."""
     import cfbd
@@ -177,8 +214,16 @@ def score_game(home: str, away: str, home_rating: float, away_rating: float, mar
 
 
 def build_picks(ratings: dict, games: list[dict], provider: str = DEFAULT_PROVIDER,
-                 home_field: float = DEFAULT_HOME_FIELD, std: float = SPREAD_STD_DEV) -> pd.DataFrame:
-    """Build the full picks DataFrame from SP+ ratings and a list of game/line dicts."""
+                 home_field: float = DEFAULT_HOME_FIELD, std: float = SPREAD_STD_DEV,
+                 game_info: dict | None = None) -> pd.DataFrame:
+    """
+    Build the full picks DataFrame from SP+ ratings and a list of game/line dicts.
+
+    game_info, if provided (see get_game_info), is keyed by (home_team, away_team) and
+    used to zero out home_field advantage for neutral-site games and apply it correctly
+    for true home games (e.g. CFP first-round) — see get_game_info's docstring. Games
+    missing from game_info fall back to the flat home_field value.
+    """
     rows = []
     for game in games:
         line = pick_line(game, provider)
@@ -187,8 +232,12 @@ def build_picks(ratings: dict, games: list[dict], provider: str = DEFAULT_PROVID
         home, away = game["home_team"], game["away_team"]
         if home not in ratings or away not in ratings:
             continue
-        row = score_game(home, away, ratings[home], ratings[away], float(line["spread"]), home_field, std)
+        info = (game_info or {}).get((home, away))
+        game_home_field = 0.0 if info and info["neutral_site"] else home_field
+        row = score_game(home, away, ratings[home], ratings[away], float(line["spread"]), game_home_field, std)
         row["provider"] = line.get("provider")
+        row["neutral_site"] = bool(info["neutral_site"]) if info else None
+        row["game_notes"] = info["notes"] if info else ""
         rows.append(row)
     return pd.DataFrame(rows)
 

@@ -49,8 +49,9 @@ if __name__ == "__main__":
 
     ratings = model.get_sp_ratings(bearer_token, YEAR)
     games = model.get_weekly_lines(bearer_token, YEAR, WEEK, SEASON_TYPE)
+    game_info = model.get_game_info(bearer_token, YEAR, WEEK, SEASON_TYPE)
 
-    all_games = model.build_picks(ratings, games)
+    all_games = model.build_picks(ratings, games, game_info=game_info)
     strong = model.strong_picks(all_games).sort_values("cover_prob", ascending=False)
 
     pretty_print_picks(
