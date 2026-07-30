@@ -93,15 +93,17 @@ def get_weekly_lines(bearer_token: str, year: int, week: int | None, season_type
 def get_game_info(bearer_token: str, year: int, week: int | None, season_type: str,
                    cache_dir: Path = CACHE_DIR) -> dict:
     """
-    Pull scheduling metadata (neutral site, round/bowl name) for FBS games from the Games API.
+    Pull scheduling metadata (neutral site, round/bowl name, kickoff date) for FBS games
+    from the Games API.
 
-    Betting lines alone don't say whether a game is at a neutral site. This matters most
-    in the postseason: CFBD lumps every postseason FBS game — bowls *and* all four rounds
-    of the CFP — under a single week=1, but they aren't all neutral. Bowl games and CFP
-    quarterfinals/semifinals/the championship are neutral-site; CFP first-round games are
-    played at the higher seed's campus stadium (neutral_site=False), so the home team
-    should still get home-field advantage there. Returns
-    {(home_team, away_team): {"neutral_site": bool, "notes": str}}.
+    Betting lines alone don't say whether a game is at a neutral site or when it kicks
+    off. This matters most in the postseason: CFBD lumps every postseason FBS game —
+    bowls *and* all four rounds of the CFP — under a single week=1, but they aren't all
+    neutral. Bowl games and CFP quarterfinals/semifinals/the championship are
+    neutral-site; CFP first-round games are played at the higher seed's campus stadium
+    (neutral_site=False), so the home team should still get home-field advantage there.
+    Returns {(home_team, away_team): {"neutral_site": bool, "notes": str,
+    "start_date": str | None (ISO 8601, UTC), "start_time_tbd": bool}}.
     """
     import cfbd
 
@@ -118,7 +120,12 @@ def get_game_info(bearer_token: str, year: int, week: int | None, season_type: s
         games = cfbd.GamesApi(client).get_games(**kwargs)
 
     info = {
-        (g.home_team, g.away_team): {"neutral_site": bool(g.neutral_site), "notes": g.notes or ""}
+        (g.home_team, g.away_team): {
+            "neutral_site": bool(g.neutral_site),
+            "notes": g.notes or "",
+            "start_date": g.start_date.isoformat() if g.start_date else None,
+            "start_time_tbd": bool(g.start_time_tbd),
+        }
         for g in games
     }
 
@@ -238,6 +245,8 @@ def build_picks(ratings: dict, games: list[dict], provider: str = DEFAULT_PROVID
         row["provider"] = line.get("provider")
         row["neutral_site"] = bool(info["neutral_site"]) if info else None
         row["game_notes"] = info["notes"] if info else ""
+        row["start_date"] = info.get("start_date") if info else None
+        row["start_time_tbd"] = bool(info.get("start_time_tbd")) if info else None
         rows.append(row)
     return pd.DataFrame(rows)
 

@@ -1,11 +1,14 @@
 import itertools
 import os
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 import pandas as pd
 
 import model
+
+EASTERN = ZoneInfo("America/New_York")
 
 
 # ── CFB week helper ───────────────────────────────────────────────────────────
@@ -17,6 +20,21 @@ def get_current_cfb_week() -> tuple:
         return current_year - 1, 1
     week = min((today - season_start).days // 7 + 1, 15)
     return current_year, week
+
+
+def format_game_date(iso_start_date, start_time_tbd) -> str:
+    """Format a UTC ISO start_date (from get_game_info) as an ET date, with time unless TBD."""
+    if not iso_start_date:
+        return ""
+    try:
+        dt_et = datetime.fromisoformat(iso_start_date).astimezone(EASTERN)
+    except ValueError:
+        return ""
+    date_part = dt_et.strftime("%b %d")
+    if start_time_tbd:
+        return date_part
+    time_part = dt_et.strftime("%I:%M %p").lstrip("0")
+    return f"{date_part}, {time_part} ET"
 
 
 # ── page config ───────────────────────────────────────────────────────────────
@@ -124,6 +142,7 @@ DISPLAY_COLUMNS = {
     "model_spread_home": "Model Spread", "market_spread_home": "Market Spread",
     "edge_points": "Edge (pts)", "cover_prob": "Cover Prob", "tier": "Tier",
     "model_pick": "Pick", "neutral_site": "Neutral Site", "game_notes": "Game",
+    "start_date": "Date",
 }
 
 
@@ -231,6 +250,9 @@ if df.empty:
     st.warning("No games returned. Try a different year or toggle postseason.")
     st.stop()
 
+df["start_date"] = df.apply(lambda r: format_game_date(r["start_date"], r["start_time_tbd"]), axis=1)
+df = df.drop(columns=["start_time_tbd"])
+
 strong = model.strong_picks(df)
 
 # ── Summary metrics ───────────────────────────────────────────────────────────
@@ -299,8 +321,10 @@ with tab1:
             pick_team, cover, edge = row["pick_team"], row["cover_prob"], row["edge_points"]
             spread                 = row["market_spread_home"]
             neutral_site, notes    = row.get("neutral_site"), row.get("game_notes") or ""
+            game_date               = row.get("start_date") or ""
             spread_str = f"Spread: {spread:+.1f}" if spread is not None else ""
             site_str = "" if neutral_site is None else ("🏟 Neutral Site" if neutral_site else "🏠 Home Game")
+            date_str = f"🗓 {game_date}" if game_date else ""
             note_str = f"<br/>{notes}" if notes else ""
             cards_html += (
                 f'<div class="pickem-card tier-{tier}">'
@@ -314,6 +338,7 @@ with tab1:
                 f'Tier: <b>{tier}</b>'
                 f'{"<br/>" + spread_str if spread_str else ""}'
                 f'{"<br/>" + site_str if site_str else ""}'
+                f'{"<br/>" + date_str if date_str else ""}'
                 f'{note_str}'
                 f'</div></div>'
             )
