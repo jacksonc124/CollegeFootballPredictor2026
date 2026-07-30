@@ -142,7 +142,7 @@ DISPLAY_COLUMNS = {
     "model_spread_home": "Model Spread", "market_spread_home": "Market Spread",
     "edge_points": "Edge (pts)", "cover_prob": "Cover Prob", "tier": "Tier",
     "model_pick": "Pick", "neutral_site": "Neutral Site", "game_notes": "Game",
-    "start_date": "Date",
+    "start_date": "Date", "venue": "Venue",
 }
 
 
@@ -322,8 +322,14 @@ with tab1:
             spread                 = row["market_spread_home"]
             neutral_site, notes    = row.get("neutral_site"), row.get("game_notes") or ""
             game_date               = row.get("start_date") or ""
+            venue                   = row.get("venue") or ""
             spread_str = f"Spread: {spread:+.1f}" if spread is not None else ""
-            site_str = "" if neutral_site is None else ("🏟 Neutral Site" if neutral_site else "🏠 Home Game")
+            if neutral_site is None:
+                site_str = ""
+            elif neutral_site:
+                site_str = f"🏟 {venue}" if venue else "🏟 Neutral Site"
+            else:
+                site_str = f"🏠 {venue}" if venue else "🏠 Home Game"
             date_str = f"🗓 {game_date}" if game_date else ""
             note_str = f"<br/>{notes}" if notes else ""
             cards_html += (

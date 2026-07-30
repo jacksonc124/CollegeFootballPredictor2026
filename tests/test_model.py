@@ -112,20 +112,24 @@ def test_build_picks_threads_through_start_date_and_tbd_flag():
 
     with_date = model.build_picks(ratings, games, game_info={
         ("Home U", "Away U"): {"neutral_site": True, "notes": "Bowl",
-                                "start_date": "2025-12-20T18:00:00Z", "start_time_tbd": False},
+                                "start_date": "2025-12-20T18:00:00Z", "start_time_tbd": False,
+                                "venue": "Cotton Bowl Stadium"},
     })
     assert with_date.iloc[0]["start_date"] == "2025-12-20T18:00:00Z"
     assert with_date.iloc[0]["start_time_tbd"] == False  # noqa: E712 (numpy bool from the DataFrame)
+    assert with_date.iloc[0]["venue"] == "Cotton Bowl Stadium"
 
-    # game_info entries without start_date/start_time_tbd (e.g. older cache) shouldn't error.
+    # game_info entries without start_date/start_time_tbd/venue (e.g. older cache) shouldn't error.
     legacy_info = model.build_picks(ratings, games, game_info={
         ("Home U", "Away U"): {"neutral_site": True, "notes": "Bowl"},
     })
     assert legacy_info.iloc[0]["start_date"] is None
+    assert legacy_info.iloc[0]["venue"] == ""
 
     no_info = model.build_picks(ratings, games)
     assert no_info.iloc[0]["start_date"] is None
     assert no_info.iloc[0]["start_time_tbd"] is None
+    assert no_info.iloc[0]["venue"] == ""
 
 
 def test_build_picks_empty_games_returns_empty_dataframe():

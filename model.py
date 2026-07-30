@@ -90,25 +90,32 @@ def get_weekly_lines(bearer_token: str, year: int, week: int | None, season_type
     return result
 
 
+# Bump this whenever get_game_info's return schema changes. It's baked into the cache
+# filename so a stale on-disk cache from an older schema is never mistaken for the new
+# one — it just gets ignored and refetched instead of silently returning missing fields.
+GAME_INFO_CACHE_VERSION = 2
+
+
 def get_game_info(bearer_token: str, year: int, week: int | None, season_type: str,
                    cache_dir: Path = CACHE_DIR) -> dict:
     """
-    Pull scheduling metadata (neutral site, round/bowl name, kickoff date) for FBS games
-    from the Games API.
+    Pull scheduling metadata (neutral site, round/bowl name, kickoff date, venue) for
+    FBS games from the Games API.
 
-    Betting lines alone don't say whether a game is at a neutral site or when it kicks
-    off. This matters most in the postseason: CFBD lumps every postseason FBS game —
+    Betting lines alone don't say whether a game is at a neutral site or when/where it's
+    played. This matters most in the postseason: CFBD lumps every postseason FBS game —
     bowls *and* all four rounds of the CFP — under a single week=1, but they aren't all
     neutral. Bowl games and CFP quarterfinals/semifinals/the championship are
     neutral-site; CFP first-round games are played at the higher seed's campus stadium
     (neutral_site=False), so the home team should still get home-field advantage there.
     Returns {(home_team, away_team): {"neutral_site": bool, "notes": str,
-    "start_date": str | None (ISO 8601, UTC), "start_time_tbd": bool}}.
+    "start_date": str | None (ISO 8601, UTC), "start_time_tbd": bool, "venue": str}}.
     """
     import cfbd
 
     wk_str = "all" if week is None else str(week)
-    cache_file = cache_path(f"games_{year}_{season_type}_wk{wk_str}.json", cache_dir=cache_dir)
+    cache_file = cache_path(f"games_v{GAME_INFO_CACHE_VERSION}_{year}_{season_type}_wk{wk_str}.json",
+                             cache_dir=cache_dir)
     if cache_file.exists():
         raw = json.loads(cache_file.read_text())
         return {tuple(k.split("||", 1)): v for k, v in raw.items()}
@@ -125,6 +132,7 @@ def get_game_info(bearer_token: str, year: int, week: int | None, season_type: s
             "notes": g.notes or "",
             "start_date": g.start_date.isoformat() if g.start_date else None,
             "start_time_tbd": bool(g.start_time_tbd),
+            "venue": g.venue or "",
         }
         for g in games
     }
@@ -247,6 +255,7 @@ def build_picks(ratings: dict, games: list[dict], provider: str = DEFAULT_PROVID
         row["game_notes"] = info["notes"] if info else ""
         row["start_date"] = info.get("start_date") if info else None
         row["start_time_tbd"] = bool(info.get("start_time_tbd")) if info else None
+        row["venue"] = info.get("venue", "") if info else ""
         rows.append(row)
     return pd.DataFrame(rows)
 
