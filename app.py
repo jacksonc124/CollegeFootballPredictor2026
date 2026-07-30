@@ -101,6 +101,18 @@ st.markdown("""
     .futures-label { font-size: 11px; opacity: 0.5; }
     .bar-bg { margin-top: 6px; background: rgba(128,128,128,0.15); border-radius: 4px; height: 4px; width: 100%; }
     .bar-fill { border-radius: 4px; height: 4px; }
+
+    /* Light chip behind every team logo so dark/transparent PNG artwork stays visible
+       regardless of the app's light/dark theme. */
+    .logo-chip {
+        display: inline-flex; align-items: center; justify-content: center;
+        background: rgba(255,255,255,0.94);
+        border: 1px solid rgba(0,0,0,0.08);
+        border-radius: 50%;
+        flex-shrink: 0;
+    }
+
+    .fetch-caption { font-size: 12px; opacity: 0.6; margin-top: 4px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -132,7 +144,7 @@ default_year, default_week = get_current_cfb_week()
 with st.sidebar:
     st.markdown("# 🏈 CFB MODEL")
     st.markdown("---")
-    st.markdown("### Season")
+    st.markdown("### 📅 Season")
     year = st.number_input("Year", min_value=2000, max_value=2030, value=default_year, step=1)
     postseason = st.checkbox("📬 Postseason / Bowl Games", value=False,
                              help="Fetches every bowl & CFP game for the selected year, ignoring week. "
@@ -140,7 +152,7 @@ with st.sidebar:
     week = st.slider("Week", min_value=1, max_value=15, value=default_week, step=1,
                      disabled=postseason)
 
-    st.markdown("### Model")
+    st.markdown("### ⚙️ Model")
     home_field = st.number_input(
         "Home Field Advantage (pts)",
         min_value=0.0, max_value=10.0, value=model.DEFAULT_HOME_FIELD, step=0.5,
@@ -148,6 +160,15 @@ with st.sidebar:
              "semifinals/championship) automatically get 0 — detected per-game from CFBD, not guessed "
              "from the postseason toggle. CFP first-round games are true home games for the higher seed, "
              "so they still get this value.",
+    )
+
+    st.markdown("---")
+    st.markdown(
+        f'<div class="fetch-caption">📡 Fetching <b>{year} · '
+        f'{"Postseason" if postseason else f"Week {week}"}</b> · consensus lines'
+        f'<br/>Results update automatically as you change these settings. '
+        f'Ratings/lines are cached up to 1 hour.</div>',
+        unsafe_allow_html=True,
     )
 
 # Resolve API params from sidebar state
@@ -218,16 +239,36 @@ c1.metric("Total Games",    len(df))
 c2.metric("Strong Picks",   len(strong))
 c3.metric("Tier A Picks",   len(df[df["tier"] == "A"]))
 c4.metric("Avg Cover Prob", f"{df['cover_prob'].mean():.3f}")
+
+# ── Week-at-a-glance chart ──────────────────────────────────────────────────────
+TIER_COLORS = {"A": "#22c55e", "B": "#facc15", "C": "#fb923c", "Pass": "#6b7280"}
+chart_df = df[["edge_points", "cover_prob", "tier"]].rename(
+    columns={"edge_points": "Edge (pts)", "cover_prob": "Cover Prob"}
+)
+chart_df["Tier Color"] = df["tier"].map(TIER_COLORS)
+st.scatter_chart(chart_df, x="Edge (pts)", y="Cover Prob", color="Tier Color", height=220, use_container_width=True)
+st.caption("Each dot is one game · farther from center = bigger edge (either direction) · "
+           "higher = more confident · color = tier (🟢 A · 🟡 B · 🟠 C · ⚪ Pass)")
 st.markdown("---")
 
 
 # ── Logo helper ───────────────────────────────────────────────────────────────
 def logo_img(team, size=32):
+    """
+    Render a team logo (or initials fallback) inside a light circular chip.
+    The chip guarantees contrast regardless of app theme or how dark/transparent
+    a given team's logo artwork is — some logos are otherwise invisible on a
+    dark background.
+    """
     url = logos.get(team, "")
     if url:
-        return f'<img src="{url}" width="{size}" height="{size}" style="object-fit:contain;vertical-align:middle;" />'
-    initials = "".join(w[0] for w in team.split()[:2]).upper()
-    return f'<span style="font-family:\'Bebas Neue\',sans-serif;font-size:{size//2}px;opacity:0.4;">{initials}</span>'
+        inner = f'<img src="{url}" width="{size}" height="{size}" style="object-fit:contain;" />'
+    else:
+        initials = "".join(w[0] for w in team.split()[:2]).upper()
+        inner = f'<span style="font-family:\'Bebas Neue\',sans-serif;font-size:{size // 2}px;color:#0d0f14;">{initials}</span>'
+    pad = max(2, size // 8)
+    chip_size = size + pad * 2
+    return f'<span class="logo-chip" style="width:{chip_size}px;height:{chip_size}px;">{inner}</span>'
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -283,10 +324,28 @@ with tab1:
     st.markdown("## 📋 All Games")
     tier_filter = st.multiselect("Filter by Tier", ["A","B","C","Pass"], default=["A","B","C","Pass"], key="tf1")
     filtered = df[df["tier"].isin(tier_filter)] if tier_filter else df
-    st.dataframe(
+
+    TIER_CELL_COLORS = {"A": "#22c55e33", "B": "#facc1533", "C": "#fb923c33", "Pass": "transparent"}
+
+    def _shade_tier(val):
+        return f"background-color: {TIER_CELL_COLORS.get(val, 'transparent')}"
+
+    table_df = (
         filtered.drop(columns=["pick_team"]).rename(columns=DISPLAY_COLUMNS)
-                .sort_values("Edge (pts)", key=lambda s: s.abs(), ascending=False).reset_index(drop=True),
+                .sort_values("Edge (pts)", key=lambda s: s.abs(), ascending=False).reset_index(drop=True)
+    )
+    st.dataframe(
+        table_df.style.map(_shade_tier, subset=["Tier"]),
         use_container_width=True, height=min(50 + 35 * len(filtered), 600),
+        column_config={
+            "Cover Prob": st.column_config.ProgressColumn("Cover Prob", min_value=0.0, max_value=1.0),
+            "Edge (pts)": st.column_config.NumberColumn("Edge (pts)", format="%+.1f"),
+            "Model Spread": st.column_config.NumberColumn("Model Spread", format="%+.1f"),
+            "Market Spread": st.column_config.NumberColumn("Market Spread", format="%+.1f"),
+            "SP+ Home": st.column_config.NumberColumn("SP+ Home", format="%+.1f"),
+            "SP+ Away": st.column_config.NumberColumn("SP+ Away", format="%+.1f"),
+            "Neutral Site": st.column_config.CheckboxColumn("Neutral Site"),
+        },
     )
     st.markdown("---")
     dl1, dl2 = st.columns(2)
@@ -305,7 +364,7 @@ with tab1:
 
 # ── TAB 2: Parlays ────────────────────────────────────────────────────────────
 @st.fragment
-def render_parlay_tab(df_inner, logos_inner):
+def render_parlay_tab(df_inner):
     st.markdown("## 🎰 Team Parlays")
     st.caption("Built from Tier A & B picks · Combined prob = product of cover probs · Est. payout assumes −110 per leg")
     st.caption("⚠️ Combined probability assumes each leg's outcome is statistically independent — "
@@ -359,12 +418,9 @@ def render_parlay_tab(df_inner, logos_inner):
     for i, p in enumerate(parlay_rows[:5]):
         legs_html = ""
         for _, leg in p["legs"].iterrows():
-            lm = logos_inner.get(leg["pick_team"], "")
-            logo_tag = (f'<img src="{lm}" width="20" height="20" style="object-fit:contain;vertical-align:middle;" />'
-                        if lm else "")
             legs_html += (
                 f'<div class="parlay-leg">'
-                f'{logo_tag}&nbsp;<b>{leg["pick_team"]}</b> ATS'
+                f'{logo_img(leg["pick_team"], 20)}&nbsp;<b>{leg["pick_team"]}</b> ATS'
                 f'&nbsp;<span style="opacity:0.5">({leg["away_team"]} @ {leg["home_team"]})</span>'
                 f'&nbsp;&middot;&nbsp;Cover Prob: <b style="color:#facc15">{leg["cover_prob"]:.1%}</b>'
                 f'&nbsp;&middot;&nbsp;Edge: <b>{leg["edge_points"]:+.1f} pts</b>'
@@ -386,7 +442,7 @@ def render_parlay_tab(df_inner, logos_inner):
 
 
 with tab2:
-    render_parlay_tab(df, logos)
+    render_parlay_tab(df)
 
 
 # ── TAB 3: Championship Favorites ─────────────────────────────────────────────
