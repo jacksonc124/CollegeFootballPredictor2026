@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# generated cache / output data
+cfb_cache/
+all_games_*.csv
+strong_picks_*.csv
+
+# secrets
+.streamlit/secrets.toml
+.env

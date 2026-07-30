@@ -1,9 +1,11 @@
-import math
-import os
 import itertools
+import os
 from datetime import date
+
 import streamlit as st
 import pandas as pd
+
+import model
 
 
 # ── CFB week helper ───────────────────────────────────────────────────────────
@@ -103,22 +105,14 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ── math helpers ──────────────────────────────────────────────────────────────
-def normal_cdf(z):
-    return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
-
-def classify_tier(p):
-    if p >= 0.60: return "A"
-    if p >= 0.55: return "B"
-    if p >= 0.52: return "C"
-    return "Pass"
-
-
-# ── constants ─────────────────────────────────────────────────────────────────
-SPREAD_STD_DEV    = 13.0
-EDGE_THRESHOLD    = 2.0
-COVER_PROB_THRESH = 0.55
-PROVIDER          = "consensus"
+# ── display column names (raw model.py columns → friendly UI headers) ─────────
+DISPLAY_COLUMNS = {
+    "home_team": "Home", "away_team": "Away", "provider": "Provider",
+    "sp_home_rating": "SP+ Home", "sp_away_rating": "SP+ Away",
+    "model_spread_home": "Model Spread", "market_spread_home": "Market Spread",
+    "edge_points": "Edge (pts)", "cover_prob": "Cover Prob", "tier": "Tier",
+    "model_pick": "Pick",
+}
 
 
 # ── session state ─────────────────────────────────────────────────────────────
@@ -135,10 +129,6 @@ except Exception:
 # ── sidebar ───────────────────────────────────────────────────────────────────
 default_year, default_week = get_current_cfb_week()
 
-# Build tick labels for the week slider
-week_tick_labels = {w: str(w) for w in range(1, 16)}
-week_tick_labels.update({16: "🏈 Bowls", 17: "17", 18: "CFP", 19: "19", 20: "NCG"})
-
 with st.sidebar:
     st.markdown("# 🏈 CFB MODEL")
     st.markdown("---")
@@ -150,7 +140,7 @@ with st.sidebar:
                      disabled=postseason)
 
     st.markdown("### Model")
-    default_hf = 0.0 if postseason else 2.5
+    default_hf = 0.0 if postseason else model.DEFAULT_HOME_FIELD
     home_field = st.number_input(
         "Home Field Advantage (pts)",
         min_value=0.0, max_value=10.0, value=default_hf, step=0.5,
@@ -173,125 +163,40 @@ if not run_btn:
     st.info("Configure parameters in the sidebar, then press **RUN MODEL**.")
     st.stop()
 
-# ── imports ───────────────────────────────────────────────────────────────────
-try:
-    import cfbd
-    from pathlib import Path
-    import json
-except ImportError:
-    st.error("Run `python -m pip install cfbd` and restart.")
-    st.stop()
-
 if not bearer_token:
     st.error("No Bearer Token found. Set BEARER_TOKEN in Streamlit secrets.")
     st.stop()
 
-
-# ── API setup ─────────────────────────────────────────────────────────────────
-CACHE_DIR = Path("cfb_cache")
-CACHE_DIR.mkdir(exist_ok=True)
-
-def make_client():
-    return cfbd.ApiClient(cfbd.Configuration(access_token=bearer_token))
+try:
+    import cfbd  # noqa: F401  (validates the SDK is installed before we hit cached wrappers below)
+except ImportError:
+    st.error("Run `python -m pip install cfbd` and restart.")
+    st.stop()
 
 
-# ── CFBD data fetchers ────────────────────────────────────────────────────────
+# ── cached wrappers around the shared model's CFBD fetchers ───────────────────
 @st.cache_data(show_spinner=False, ttl=3600)
 def get_sp_ratings(yr):
-    cache_file = CACHE_DIR / f"sp_{yr}.json"
-    if cache_file.exists():
-        return json.loads(cache_file.read_text())
-    ratings = {}
-    with make_client() as client:
-        for t in cfbd.RatingsApi(client).get_sp(year=yr):
-            v = getattr(t, "rating", None)
-            if v is not None:
-                ratings[t.team] = float(v)
-    cache_file.write_text(json.dumps(ratings))
-    return ratings
+    return model.get_sp_ratings(bearer_token, yr)
 
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def get_weekly_lines(yr, wk, stype):
-    # wk is None for postseason (fetch all bowl games at once)
-    wk_str     = "all" if wk is None else str(wk)
-    cache_file = CACHE_DIR / f"lines_{yr}_{stype}_wk{wk_str}.json"
-    if cache_file.exists():
-        return json.loads(cache_file.read_text())
-    with make_client() as client:
-        kwargs = dict(year=yr, season_type=stype)
-        if wk is not None:
-            kwargs["week"] = wk
-        games = cfbd.BettingApi(client).get_lines(**kwargs)
-    result = [{"home_team": g.home_team, "away_team": g.away_team,
-               "lines": [{"provider": ln.provider, "spread": ln.spread} for ln in (g.lines or [])]}
-              for g in games]
-    cache_file.write_text(json.dumps(result))
-    return result
+    return model.get_weekly_lines(bearer_token, yr, wk, stype)
 
 
 @st.cache_data(show_spinner=False, ttl=86400)
 def get_team_logos(yr):
-    cache_file = CACHE_DIR / f"logos_{yr}.json"
-    if cache_file.exists():
-        return json.loads(cache_file.read_text())
-    logos = {}
-    try:
-        with make_client() as client:
-            for t in cfbd.TeamsApi(client).get_fbs_teams(year=yr):
-                if t.logos:
-                    logos[t.school] = t.logos[0]
-    except Exception:
-        pass
-    cache_file.write_text(json.dumps(logos))
-    return logos
-
-
-# ── Model ─────────────────────────────────────────────────────────────────────
-def pick_line(game, pref):
-    lines = game.get("lines") or []
-    if not lines: return None
-    for ln in lines:
-        if (ln.get("provider") or "").lower() == pref.lower():
-            return ln
-    return lines[0]
-
-def build_picks(yr, wk, stype, hf, std, prov):
-    ratings = get_sp_ratings(yr)
-    games   = get_weekly_lines(yr, wk, stype)
-    rows    = []
-    for game in games:
-        ln = pick_line(game, prov)
-        if ln is None or ln.get("spread") is None: continue
-        home, away = game["home_team"], game["away_team"]
-        if home not in ratings or away not in ratings: continue
-        model_spread  = (ratings[home] - ratings[away]) + hf
-        market_spread = float(ln["spread"])
-        edge          = model_spread + market_spread
-        z             = (-market_spread - model_spread) / std
-        home_cover    = 1.0 - normal_cdf(z)
-        if edge > 0:
-            pick, cover, pick_team = f"HOME ({home})", home_cover, home
-        elif edge < 0:
-            pick, cover, pick_team = f"AWAY ({away})", 1.0 - home_cover, away
-        else:
-            pick, cover, pick_team = "NO EDGE", 0.5, ""
-        rows.append({
-            "Home": home, "Away": away, "pick_team": pick_team,
-            "Provider": ln.get("provider"),
-            "SP+ Home": round(ratings[home], 2), "SP+ Away": round(ratings[away], 2),
-            "Model Spread": round(model_spread, 2), "Market Spread": market_spread,
-            "Edge (pts)": round(edge, 2), "Cover Prob": round(cover, 3),
-            "Tier": classify_tier(cover), "Pick": pick,
-        })
-    return pd.DataFrame(rows)
+    return model.get_team_logos(bearer_token, yr)
 
 
 # ── Fetch ─────────────────────────────────────────────────────────────────────
 with st.spinner("Fetching ratings, lines, and logos…"):
     try:
-        df    = build_picks(year, api_week, season_type, home_field, SPREAD_STD_DEV, PROVIDER)
-        logos = get_team_logos(year)
+        ratings = get_sp_ratings(year)
+        games   = get_weekly_lines(year, api_week, season_type)
+        df      = model.build_picks(ratings, games, model.DEFAULT_PROVIDER, home_field, model.SPREAD_STD_DEV)
+        logos   = get_team_logos(year)
     except Exception as e:
         st.error(f"API error: {e}")
         st.stop()
@@ -300,18 +205,14 @@ if df.empty:
     st.warning("No games returned. Try a different year or toggle postseason.")
     st.stop()
 
-strong = df[
-    (df["Edge (pts)"].abs() >= EDGE_THRESHOLD)
-    & (df["Cover Prob"] >= COVER_PROB_THRESH)
-    & (df["Tier"] != "Pass")
-]
+strong = model.strong_picks(df)
 
 # ── Summary metrics ───────────────────────────────────────────────────────────
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Total Games",    len(df))
 c2.metric("Strong Picks",   len(strong))
-c3.metric("Tier A Picks",   len(df[df["Tier"] == "A"]))
-c4.metric("Avg Cover Prob", f"{df['Cover Prob'].mean():.3f}")
+c3.metric("Tier A Picks",   len(df[df["tier"] == "A"]))
+c4.metric("Avg Cover Prob", f"{df['cover_prob'].mean():.3f}")
 st.markdown("---")
 
 
@@ -339,8 +240,8 @@ with tab1:
     st.markdown("## 🏆 CBS Pick'em — Top 12 ATS Picks")
     st.caption("Ranked by cover probability · Against the spread")
 
-    top12 = (df[df["Tier"] != "Pass"]
-             .sort_values("Cover Prob", ascending=False)
+    top12 = (df[df["tier"] != "Pass"]
+             .sort_values("cover_prob", ascending=False)
              .head(12).reset_index(drop=True))
 
     if top12.empty:
@@ -348,10 +249,10 @@ with tab1:
     else:
         cards_html = '<div class="pickem-grid">'
         for i, row in top12.iterrows():
-            tier, home, away       = row["Tier"], row["Home"], row["Away"]
-            pick_team, cover, edge = row["pick_team"], row["Cover Prob"], row["Edge (pts)"]
-            spread                 = row["Market Spread"]
-            spread_str = f"Spread: {spread:+.1f}" if spread else ""
+            tier, home, away       = row["tier"], row["home_team"], row["away_team"]
+            pick_team, cover, edge = row["pick_team"], row["cover_prob"], row["edge_points"]
+            spread                 = row["market_spread_home"]
+            spread_str = f"Spread: {spread:+.1f}" if spread is not None else ""
             cards_html += (
                 f'<div class="pickem-card tier-{tier}">'
                 f'<div class="pickem-rank">#{i + 1}</div>'
@@ -371,21 +272,24 @@ with tab1:
     st.markdown("---")
     st.markdown("## 📋 All Games")
     tier_filter = st.multiselect("Filter by Tier", ["A","B","C","Pass"], default=["A","B","C","Pass"], key="tf1")
-    filtered = df[df["Tier"].isin(tier_filter)] if tier_filter else df
+    filtered = df[df["tier"].isin(tier_filter)] if tier_filter else df
     st.dataframe(
-        filtered.drop(columns=["pick_team"]).sort_values("Edge (pts)", key=lambda s: s.abs(), ascending=False).reset_index(drop=True),
+        filtered.drop(columns=["pick_team"]).rename(columns=DISPLAY_COLUMNS)
+                .sort_values("Edge (pts)", key=lambda s: s.abs(), ascending=False).reset_index(drop=True),
         use_container_width=True, height=min(50 + 35 * len(filtered), 600),
     )
     st.markdown("---")
     dl1, dl2 = st.columns(2)
     with dl1:
         fname = f"all_games_{year}_postseason" if postseason else f"all_games_{year}_wk{week}"
-        st.download_button("⬇️ All Games (CSV)", data=df.drop(columns=["pick_team"]).to_csv(index=False),
+        st.download_button("⬇️ All Games (CSV)",
+                           data=df.drop(columns=["pick_team"]).rename(columns=DISPLAY_COLUMNS).to_csv(index=False),
                            file_name=f"{fname}.csv", mime="text/csv")
     with dl2:
         if not strong.empty:
             fname2 = f"strong_picks_{year}_postseason" if postseason else f"strong_picks_{year}_wk{week}"
-            st.download_button("⬇️ Strong Picks (CSV)", data=strong.drop(columns=["pick_team"]).to_csv(index=False),
+            st.download_button("⬇️ Strong Picks (CSV)",
+                               data=strong.drop(columns=["pick_team"]).rename(columns=DISPLAY_COLUMNS).to_csv(index=False),
                                file_name=f"{fname2}.csv", mime="text/csv")
 
 
@@ -394,6 +298,8 @@ with tab1:
 def render_parlay_tab(df_inner, logos_inner):
     st.markdown("## 🎰 Team Parlays")
     st.caption("Built from Tier A & B picks · Combined prob = product of cover probs · Est. payout assumes −110 per leg")
+    st.caption("⚠️ Combined probability assumes each leg's outcome is statistically independent — "
+               "correlated results (e.g. conference-wide trends) aren't modeled.")
 
     def dec_legs():
         if st.session_state["parlay_legs"] > 2:
@@ -421,8 +327,8 @@ def render_parlay_tab(df_inner, logos_inner):
     pool_size = leg_count + 4
 
     parlay_pool = (
-        df_inner[df_inner["Tier"].isin(["A", "B"]) & (df_inner["pick_team"] != "")]
-        .sort_values("Cover Prob", ascending=False)
+        df_inner[df_inner["tier"].isin(["A", "B"]) & (df_inner["pick_team"] != "")]
+        .sort_values("cover_prob", ascending=False)
         .head(pool_size)
         .reset_index(drop=True)
     )
@@ -433,7 +339,7 @@ def render_parlay_tab(df_inner, logos_inner):
 
     combos = list(itertools.combinations(parlay_pool.index, leg_count))
     parlay_rows = sorted(
-        [{"joint_prob": round(parlay_pool.loc[list(c), "Cover Prob"].prod(), 4),
+        [{"joint_prob": round(parlay_pool.loc[list(c), "cover_prob"].prod(), 4),
           "legs": parlay_pool.loc[list(c)]} for c in combos],
         key=lambda x: x["joint_prob"], reverse=True,
     )
@@ -449,10 +355,10 @@ def render_parlay_tab(df_inner, logos_inner):
             legs_html += (
                 f'<div class="parlay-leg">'
                 f'{logo_tag}&nbsp;<b>{leg["pick_team"]}</b> ATS'
-                f'&nbsp;<span style="opacity:0.5">({leg["Away"]} @ {leg["Home"]})</span>'
-                f'&nbsp;&middot;&nbsp;Cover Prob: <b style="color:#facc15">{leg["Cover Prob"]:.1%}</b>'
-                f'&nbsp;&middot;&nbsp;Edge: <b>{leg["Edge (pts)"]:+.1f} pts</b>'
-                f'&nbsp;&middot;&nbsp;Tier {leg["Tier"]}'
+                f'&nbsp;<span style="opacity:0.5">({leg["away_team"]} @ {leg["home_team"]})</span>'
+                f'&nbsp;&middot;&nbsp;Cover Prob: <b style="color:#facc15">{leg["cover_prob"]:.1%}</b>'
+                f'&nbsp;&middot;&nbsp;Edge: <b>{leg["edge_points"]:+.1f} pts</b>'
+                f'&nbsp;&middot;&nbsp;Tier {leg["tier"]}'
                 f'</div>'
             )
         all_html += (
