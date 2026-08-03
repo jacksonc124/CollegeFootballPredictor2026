@@ -261,6 +261,54 @@ def get_player_season_stats(bearer_token: str, year: int, category: str, season_
     return result
 
 
+# Only these two FBS polls — CFBD also returns FCS/D2/D3 coaches polls (and, late season,
+# Playoff Committee Rankings) under the same endpoint, which aren't relevant here.
+RANKING_POLLS = ("AP Top 25", "Coaches Poll")
+
+
+def get_rankings(bearer_token: str, year: int, week: int | None, season_type: str,
+                  cache_dir: Path = CACHE_DIR) -> dict:
+    """
+    Pull AP Top 25 and Coaches Poll rankings for a week. Returns
+    {"AP Top 25": {team_name: rank}, "Coaches Poll": {team_name: rank}} — teams absent
+    from a poll (i.e. unranked) simply aren't keys in that poll's dict.
+    """
+    import cfbd
+
+    wk_str = "all" if week is None else str(week)
+    cache_file = cache_path(f"rankings_{year}_{season_type}_wk{wk_str}.json", cache_dir=cache_dir)
+    if cache_file.exists():
+        return json.loads(cache_file.read_text())
+
+    with make_client(bearer_token) as client:
+        kwargs = dict(year=year, season_type=season_type)
+        if week is not None:
+            kwargs["week"] = week
+        poll_weeks = cfbd.RankingsApi(client).get_rankings(**kwargs)
+
+    result: dict[str, dict[str, int]] = {poll: {} for poll in RANKING_POLLS}
+    for pw in poll_weeks:
+        for poll in pw.polls:
+            if poll.poll in result:
+                for r in poll.ranks:
+                    result[poll.poll][r.school] = r.rank
+
+    cache_file.write_text(json.dumps(result))
+    return result
+
+
+def rank_badge(team: str, rankings: dict) -> str:
+    """
+    "#N " prefix for a ranked team (AP rank preferred, falling back to Coaches Poll),
+    or "" if unranked in both. rankings is get_rankings()'s return shape.
+    """
+    for poll in RANKING_POLLS:
+        rank = rankings.get(poll, {}).get(team)
+        if rank is not None:
+            return f"#{rank} "
+    return ""
+
+
 # ---------- Math helpers (pure) ----------
 
 def normal_cdf(z: float) -> float:

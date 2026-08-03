@@ -241,6 +241,11 @@ def get_scoring_stats(yr):
     return model.get_team_scoring_stats(bearer_token, yr, "both")
 
 
+@st.cache_data(show_spinner=False, ttl=3600)
+def get_rankings(yr, wk, stype):
+    return model.get_rankings(bearer_token, yr, wk, stype)
+
+
 # ── Fetch ─────────────────────────────────────────────────────────────────────
 with st.spinner("Fetching ratings, lines, and logos…"):
     try:
@@ -248,6 +253,7 @@ with st.spinner("Fetching ratings, lines, and logos…"):
         games         = get_weekly_lines(year, api_week, season_type)
         game_info     = get_game_info(year, api_week, season_type)
         scoring_stats = get_scoring_stats(year)
+        rankings      = get_rankings(year, api_week, season_type)
         df            = model.build_picks(ratings, games, model.DEFAULT_PROVIDER, home_field, model.SPREAD_STD_DEV,
                                            game_info=game_info, scoring_stats=scoring_stats)
         logos         = get_team_logos(year)
@@ -348,8 +354,9 @@ with tab1:
                 f'<div class="pickem-card tier-{tier}">'
                 f'<div class="pickem-rank">#{i + 1}</div>'
                 f'<div class="pickem-logos">{logo_img(away, 32)}<span class="pickem-vs">@</span>{logo_img(home, 32)}</div>'
-                f'<div class="pickem-matchup">{away} @ {home}</div>'
-                f'<div class="pickem-pick">&#10003; {pick_team}</div>'
+                f'<div class="pickem-matchup">{model.rank_badge(away, rankings)}{away} @ '
+                f'{model.rank_badge(home, rankings)}{home}</div>'
+                f'<div class="pickem-pick">&#10003; {model.rank_badge(pick_team, rankings)}{pick_team}</div>'
                 f'<div class="pickem-meta">'
                 f'Cover Prob: <b>{cover:.1%}</b> &nbsp;|&nbsp; '
                 f'Edge: <b>{edge:+.1f} pts</b> &nbsp;|&nbsp; '
@@ -377,6 +384,8 @@ with tab1:
         filtered.drop(columns=["pick_team"]).rename(columns=DISPLAY_COLUMNS)
                 .sort_values("Edge (pts)", key=lambda s: s.abs(), ascending=False).reset_index(drop=True)
     )
+    table_df["Home"] = table_df["Home"].map(lambda t: f"{model.rank_badge(t, rankings)}{t}")
+    table_df["Away"] = table_df["Away"].map(lambda t: f"{model.rank_badge(t, rankings)}{t}")
     st.dataframe(
         table_df.style.map(_shade_tier, subset=["Tier"]),
         use_container_width=True, height=min(50 + 35 * len(filtered), 600),
@@ -552,7 +561,8 @@ def render_parlay_tab(df_inner):
                 legs_html += (
                     f'<div class="parlay-leg">'
                     f'{logo_img(leg["leg_team"], 20)}&nbsp;<b>{leg["leg_label"]}</b>'
-                    f'&nbsp;<span style="opacity:0.5">({leg["away_team"]} @ {leg["home_team"]})</span>'
+                    f'&nbsp;<span style="opacity:0.5">({model.rank_badge(leg["away_team"], rankings)}{leg["away_team"]} @ '
+                    f'{model.rank_badge(leg["home_team"], rankings)}{leg["home_team"]})</span>'
                     f'&nbsp;&middot;&nbsp;Prob: <b style="color:#facc15">{leg["leg_prob"]:.1%}</b>'
                     f'&nbsp;&middot;&nbsp;{leg["leg_detail"]}'
                     f'</div>'
@@ -615,6 +625,8 @@ with tab3:
             .sort_values("Edge", ascending=False)
             .reset_index(drop=True)
         )
+        ml_display["Home"] = ml_display["Home"].map(lambda t: f"{model.rank_badge(t, rankings)}{t}")
+        ml_display["Away"] = ml_display["Away"].map(lambda t: f"{model.rank_badge(t, rankings)}{t}")
         st.dataframe(
             ml_display, use_container_width=True, hide_index=True,
             column_config={
@@ -642,6 +654,8 @@ with tab3:
             .sort_values("Edge (pts)", key=lambda s: s.abs(), ascending=False)
             .reset_index(drop=True)
         )
+        total_display["Home"] = total_display["Home"].map(lambda t: f"{model.rank_badge(t, rankings)}{t}")
+        total_display["Away"] = total_display["Away"].map(lambda t: f"{model.rank_badge(t, rankings)}{t}")
         st.dataframe(
             total_display, use_container_width=True, hide_index=True,
             column_config={
@@ -682,7 +696,7 @@ with tab4:
                 f'<div class="futures-card {rank_class}">'
                 f'<div class="futures-rank">{medal}</div>'
                 f'{logo_tag}'
-                f'<div class="futures-name">{team}</div>'
+                f'<div class="futures-name">{model.rank_badge(team, rankings)}{team}</div>'
                 f'<div class="futures-score">{rating:+.1f}</div>'
                 f'<div class="futures-label">SP+ Rating</div>'
                 f'<div class="bar-bg"><div class="bar-fill" style="background:#22c55e;width:{bar_pct}%;"></div></div>'
@@ -690,6 +704,25 @@ with tab4:
             )
         cards_html += "</div>"
         st.markdown(cards_html, unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.markdown("### 📰 AP & Coaches Top 25")
+    st.caption(f"Actual human-voter poll rankings for {season_label.title()}, for comparison against SP+ above.")
+
+    poll_cols = st.columns(2)
+    for col, poll_name in zip(poll_cols, model.RANKING_POLLS):
+        with col:
+            st.markdown(f"**{poll_name}**")
+            ranks = rankings.get(poll_name, {})
+            if not ranks:
+                st.caption("No rankings available for this week yet.")
+                continue
+            poll_df = (
+                pd.DataFrame(list(ranks.items()), columns=["Team", "Rank"])
+                .sort_values("Rank")
+                .reset_index(drop=True)
+            )
+            st.dataframe(poll_df, use_container_width=True, hide_index=True, height=min(50 + 35 * len(poll_df), 600))
 
 
 # ── TAB 5: Model Accuracy ─────────────────────────────────────────────────────

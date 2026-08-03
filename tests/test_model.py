@@ -283,6 +283,27 @@ def test_build_picks_no_moneyline_columns_when_line_lacks_them():
     assert "ml_pick_team" not in df.columns
 
 
+# ---------- Rankings ----------
+
+def test_rank_badge_prefers_ap_over_coaches():
+    rankings = {"AP Top 25": {"Ohio State": 2}, "Coaches Poll": {"Ohio State": 3}}
+    assert model.rank_badge("Ohio State", rankings) == "#2 "
+
+
+def test_rank_badge_falls_back_to_coaches_when_unranked_in_ap():
+    rankings = {"AP Top 25": {}, "Coaches Poll": {"Duke": 24}}
+    assert model.rank_badge("Duke", rankings) == "#24 "
+
+
+def test_rank_badge_empty_when_unranked_in_both():
+    rankings = {"AP Top 25": {"Ohio State": 2}, "Coaches Poll": {"Ohio State": 3}}
+    assert model.rank_badge("Vanderbilt", rankings) == ""
+
+
+def test_rank_badge_handles_missing_poll_keys():
+    assert model.rank_badge("Ohio State", {}) == ""
+
+
 # ---------- Per-category stat leaders ----------
 
 def test_top_stat_leaders_ranks_by_requested_stat_type():
