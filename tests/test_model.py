@@ -169,6 +169,89 @@ def test_predict_total_none_when_a_team_has_no_games_played():
     assert model.predict_total(None, away_scoring) is None
 
 
+# ---------- Opponent-adjusted metrics ----------
+
+def test_league_average_adjusted_metrics_computes_mean():
+    adjusted_metrics = {
+        "A": {"offense_epa": 0.1, "defense_epa_allowed": 0.2},
+        "B": {"offense_epa": 0.3, "defense_epa_allowed": 0.4},
+    }
+    avg_off, avg_def = model.league_average_adjusted_metrics(adjusted_metrics)
+    assert avg_off == 0.2
+    assert math.isclose(avg_def, 0.3)
+
+
+def test_league_average_adjusted_metrics_empty_returns_zero():
+    assert model.league_average_adjusted_metrics({}) == (0.0, 0.0)
+
+
+def test_adjusted_total_delta_zero_when_using_default_zero_baseline_and_all_teams_zero():
+    # With the default 0.0 baseline (no league_average_adjusted_metrics call), an all-zero
+    # matchup produces no adjustment. Real EPA data isn't actually zero-centered in
+    # practice — see test_adjusted_total_delta_zero_when_teams_are_at_the_league_average
+    # below for why callers should always pass real league averages, not rely on this default.
+    home_adj = {"offense_epa": 0.0, "defense_epa_allowed": 0.0}
+    away_adj = {"offense_epa": 0.0, "defense_epa_allowed": 0.0}
+    assert model.adjusted_total_delta(home_adj, away_adj) == 0.0
+
+
+def test_adjusted_total_delta_zero_when_teams_are_at_the_league_average():
+    # Both teams sit exactly at league average (0.155, matching real 2025 data) — despite
+    # nonzero raw EPA values, neither team is actually better/worse than average, so the
+    # adjustment must be zero. This is exactly the bug that shipped initially: treating 0
+    # as neutral inflated every game's total by ~10+ points because real EPA averages ~0.155,
+    # not 0.
+    home_adj = {"offense_epa": 0.155, "defense_epa_allowed": 0.155}
+    away_adj = {"offense_epa": 0.155, "defense_epa_allowed": 0.155}
+    delta = model.adjusted_total_delta(home_adj, away_adj, league_avg_offense=0.155, league_avg_defense_allowed=0.155)
+    assert delta == 0.0
+
+
+def test_adjusted_total_delta_positive_when_both_sides_favor_scoring_relative_to_league():
+    # Home has a great offense relative to league average, away has a bad defense relative
+    # to league average; both push the total up.
+    home_adj = {"offense_epa": 0.35, "defense_epa_allowed": 0.155}
+    away_adj = {"offense_epa": 0.155, "defense_epa_allowed": 0.355}
+    delta = model.adjusted_total_delta(home_adj, away_adj, league_avg_offense=0.155,
+                                        league_avg_defense_allowed=0.155, plays_per_game=35.0)
+    # home_off above avg = 0.35-0.155=0.195; away_def above avg = 0.355-0.155=0.2
+    # home_boost = (0.195+0.2)/2 = 0.1975; away_boost = (0+0)/2 = 0
+    assert math.isclose(delta, 0.1975 * 35.0)
+
+
+def test_adjusted_total_delta_none_when_either_team_missing():
+    assert model.adjusted_total_delta(None, {"offense_epa": 0.1, "defense_epa_allowed": 0.1}) is None
+    assert model.adjusted_total_delta({"offense_epa": 0.1, "defense_epa_allowed": 0.1}, None) is None
+
+
+# ---------- Weather adjustment ----------
+
+def test_weather_total_adjustment_no_effect_when_calm_and_dry():
+    weather = {"game_indoors": False, "wind_speed": 5.0, "precipitation": 0, "snowfall": 0}
+    assert model.weather_total_adjustment(weather) == 0.0
+
+
+def test_weather_total_adjustment_reduces_for_high_wind():
+    weather = {"game_indoors": False, "wind_speed": 25.0, "precipitation": 0, "snowfall": 0}
+    # (25 - 15) * 0.4 = 4.0 points reduction
+    assert model.weather_total_adjustment(weather) == -4.0
+
+
+def test_weather_total_adjustment_zero_when_indoors_regardless_of_wind():
+    weather = {"game_indoors": True, "wind_speed": 40.0, "precipitation": 5, "snowfall": 2}
+    assert model.weather_total_adjustment(weather) == 0.0
+
+
+def test_weather_total_adjustment_zero_when_missing_data():
+    assert model.weather_total_adjustment(None) == 0.0
+    assert model.weather_total_adjustment({}) == 0.0
+
+
+def test_weather_total_adjustment_reduces_for_precipitation_and_snow():
+    weather = {"game_indoors": False, "wind_speed": 5.0, "precipitation": 0.5, "snowfall": 1.0}
+    assert model.weather_total_adjustment(weather) == -2.0 + -3.0
+
+
 def test_score_total_picks_over_when_predicted_above_market():
     result = model.score_total(predicted_total=51.0, market_total=45.0)
     assert result["total_pick"] == "OVER"
@@ -259,6 +342,59 @@ def test_build_picks_adds_totals_and_moneyline_columns():
     assert row["home_moneyline"] == -150
     assert row["away_moneyline"] == 130
     assert row["ml_pick_team"] in ("Home U", "Away U")
+
+
+def test_build_picks_applies_opponent_and_weather_adjustments_to_total():
+    ratings = {"Home U": 10.0, "Away U": 10.0}
+    games = [{
+        "home_team": "Home U", "away_team": "Away U",
+        "lines": [{"provider": "consensus", "spread": 0.0, "over_under": 45.0}],
+    }]
+    scoring_stats = {
+        "Home U": {"avg_points_scored": 30, "avg_points_allowed": 20, "games_played": 5},
+        "Away U": {"avg_points_scored": 24, "avg_points_allowed": 28, "games_played": 5},
+    }
+    # Base predicted_total (no adjustments) is 51.0, per test_build_picks_adds_totals_and_moneyline_columns.
+    # A third team is included purely to make the league average non-degenerate — with only
+    # Home U/Away U in the pool, their pairwise deviations from a 2-team average always net
+    # to exactly zero, which wouldn't exercise the adjustment at all.
+    adjusted_metrics = {
+        "Home U": {"offense_epa": 0.3, "defense_epa_allowed": 0.1},
+        "Away U": {"offense_epa": 0.1, "defense_epa_allowed": 0.1},
+        "Other U": {"offense_epa": 0.1, "defense_epa_allowed": 0.1},
+    }
+    game_weather = {
+        ("Home U", "Away U"): {"game_indoors": False, "wind_speed": 25.0, "precipitation": 0, "snowfall": 0},
+    }
+
+    df = model.build_picks(ratings, games, scoring_stats=scoring_stats,
+                            adjusted_metrics=adjusted_metrics, game_weather=game_weather)
+    row = df.iloc[0]
+
+    league_avg_off, league_avg_def = model.league_average_adjusted_metrics(adjusted_metrics)
+    expected_opp_delta = model.adjusted_total_delta(adjusted_metrics["Home U"], adjusted_metrics["Away U"],
+                                                      league_avg_off, league_avg_def)
+    expected_weather_delta = model.weather_total_adjustment(game_weather[("Home U", "Away U")])
+    assert expected_opp_delta != 0.0  # sanity check that this test actually exercises a nonzero adjustment
+    assert row["opponent_adjustment"] == round(expected_opp_delta, 1)
+    assert row["weather_adjustment"] == round(expected_weather_delta, 1)
+    assert row["predicted_total"] == round(51.0 + expected_opp_delta + expected_weather_delta, 1)
+
+
+def test_build_picks_totals_adjustment_columns_none_when_not_provided():
+    ratings = {"Home U": 10.0, "Away U": 10.0}
+    games = [{
+        "home_team": "Home U", "away_team": "Away U",
+        "lines": [{"provider": "consensus", "spread": 0.0, "over_under": 45.0}],
+    }]
+    scoring_stats = {
+        "Home U": {"avg_points_scored": 30, "avg_points_allowed": 20, "games_played": 5},
+        "Away U": {"avg_points_scored": 24, "avg_points_allowed": 28, "games_played": 5},
+    }
+    df = model.build_picks(ratings, games, scoring_stats=scoring_stats)
+    row = df.iloc[0]
+    assert row["opponent_adjustment"] is None
+    assert row["weather_adjustment"] is None
 
 
 def test_build_picks_skips_totals_when_scoring_stats_missing_a_team():

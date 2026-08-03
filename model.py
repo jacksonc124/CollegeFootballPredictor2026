@@ -261,6 +261,64 @@ def get_player_season_stats(bearer_token: str, year: int, category: str, season_
     return result
 
 
+def get_game_weather(bearer_token: str, year: int, week: int | None, season_type: str,
+                      cache_dir: Path = CACHE_DIR) -> dict:
+    """
+    Pull weather conditions per game (requires a CFBD tier with weather access). Returns
+    {(home_team, away_team): {"game_indoors": bool, "wind_speed": float | None,
+    "precipitation": float | None, "snowfall": float | None, "temperature": float | None}}.
+    """
+    import cfbd
+
+    wk_str = "all" if week is None else str(week)
+    cache_file = cache_path(f"weather_{year}_{season_type}_wk{wk_str}.json", cache_dir=cache_dir)
+    if cache_file.exists():
+        raw = json.loads(cache_file.read_text())
+        return {tuple(k.split("||", 1)): v for k, v in raw.items()}
+
+    with make_client(bearer_token) as client:
+        kwargs = dict(year=year, season_type=season_type, classification="fbs")
+        if week is not None:
+            kwargs["week"] = week
+        games = cfbd.GamesApi(client).get_weather(**kwargs)
+
+    result = {
+        (g.home_team, g.away_team): {
+            "game_indoors": bool(g.game_indoors),
+            "wind_speed": g.wind_speed,
+            "precipitation": g.precipitation,
+            "snowfall": g.snowfall,
+            "temperature": g.temperature,
+        }
+        for g in games
+    }
+    serializable = {f"{h}||{a}": v for (h, a), v in result.items()}
+    cache_file.write_text(json.dumps(serializable))
+    return result
+
+
+def get_adjusted_team_metrics(bearer_token: str, year: int, cache_dir: Path = CACHE_DIR) -> dict:
+    """
+    Pull CFBD's opponent-adjusted team efficiency (EPA/play, offense and allowed defense)
+    for the season — requires a CFBD tier with adjustedMetrics access. EPA/play values are
+    already centered near zero (they represent value above situational expectation), so 0
+    is a reasonable neutral baseline. Returns
+    {team: {"offense_epa": float, "defense_epa_allowed": float}}.
+    """
+    import cfbd
+
+    cache_file = cache_path(f"adj_metrics_{year}.json", cache_dir=cache_dir)
+    if cache_file.exists():
+        return json.loads(cache_file.read_text())
+
+    with make_client(bearer_token) as client:
+        rows = cfbd.AdjustedMetricsApi(client).get_adjusted_team_season_stats(year=year)
+
+    result = {r.team: {"offense_epa": r.epa.total, "defense_epa_allowed": r.epa_allowed.total} for r in rows}
+    cache_file.write_text(json.dumps(result))
+    return result
+
+
 # Only these two FBS polls — CFBD also returns FCS/D2/D3 coaches polls (and, late season,
 # Playoff Committee Rankings) under the same endpoint, which aren't relevant here.
 RANKING_POLLS = ("AP Top 25", "Coaches Poll")
@@ -389,6 +447,82 @@ def predict_total(home_scoring: dict | None, away_scoring: dict | None) -> float
     return home_pred + away_pred
 
 
+# Rough average offensive plays run by one team in one game — used to convert an EPA/play
+# differential into a points estimate. Not empirically calibrated, same spirit as
+# TOTAL_STD_DEV/PASSING_YARD_WEIGHT elsewhere in this file: a disclosed, reasonable
+# heuristic rather than a fit constant.
+ADJUSTED_METRICS_PLAYS_PER_GAME = 35.0
+
+
+def league_average_adjusted_metrics(adjusted_metrics: dict) -> tuple[float, float]:
+    """
+    Mean offense_epa and defense_epa_allowed across every team in adjusted_metrics.
+
+    These EPA values are NOT zero-centered in practice — verified against live 2025 data,
+    where both averaged ~+0.155 across all 136 FBS teams, not 0. adjusted_total_delta needs
+    this as the neutral baseline (a team's deviation from the league, not from zero), or it
+    silently treats every team as "above average" and inflates every predicted total.
+    """
+    if not adjusted_metrics:
+        return 0.0, 0.0
+    offense_values = [v["offense_epa"] for v in adjusted_metrics.values()]
+    defense_values = [v["defense_epa_allowed"] for v in adjusted_metrics.values()]
+    return sum(offense_values) / len(offense_values), sum(defense_values) / len(defense_values)
+
+
+def adjusted_total_delta(home_adj: dict | None, away_adj: dict | None,
+                          league_avg_offense: float = 0.0, league_avg_defense_allowed: float = 0.0,
+                          plays_per_game: float = ADJUSTED_METRICS_PLAYS_PER_GAME) -> float | None:
+    """
+    Points adjustment to a predicted total from CFBD's opponent-adjusted EPA/play (see
+    get_adjusted_team_metrics). Blends each side's offensive EPA-above-league-average with
+    the opponent's defensive EPA-allowed-above-league-average to estimate a scoring
+    boost/penalty, then scales by plays_per_game to convert to points. league_avg_offense
+    and league_avg_defense_allowed should come from league_average_adjusted_metrics() over
+    the same season's full team set — see that function's docstring for why this matters.
+    Returns None if either team's adjusted metrics are unavailable.
+    """
+    if not home_adj or not away_adj:
+        return None
+    home_off = home_adj["offense_epa"] - league_avg_offense
+    away_def = away_adj["defense_epa_allowed"] - league_avg_defense_allowed
+    away_off = away_adj["offense_epa"] - league_avg_offense
+    home_def = home_adj["defense_epa_allowed"] - league_avg_defense_allowed
+
+    home_boost = (home_off + away_def) / 2
+    away_boost = (away_off + home_def) / 2
+    return (home_boost + away_boost) * plays_per_game
+
+
+# Heuristic weather thresholds/magnitudes — not empirically calibrated. Wind above ~15mph
+# is the commonly cited threshold where passing/kicking (and total scoring) start to
+# suffer; precipitation and snow suppress scoring further via ball security and footing.
+WIND_THRESHOLD_MPH = 15.0
+WIND_POINTS_PER_MPH_OVER = 0.4
+PRECIPITATION_POINTS_ADJUSTMENT = -2.0
+SNOWFALL_POINTS_ADJUSTMENT = -3.0
+
+
+def weather_total_adjustment(weather: dict | None) -> float:
+    """
+    Points adjustment to a predicted total from game weather (see get_game_weather).
+    Indoor games and missing weather data get no adjustment (returns 0.0, not None,
+    since "no weather effect" is a reasonable default rather than missing data).
+    """
+    if not weather or weather.get("game_indoors"):
+        return 0.0
+
+    adjustment = 0.0
+    wind_speed = weather.get("wind_speed")
+    if wind_speed is not None and wind_speed > WIND_THRESHOLD_MPH:
+        adjustment -= (wind_speed - WIND_THRESHOLD_MPH) * WIND_POINTS_PER_MPH_OVER
+    if (weather.get("precipitation") or 0) > 0:
+        adjustment += PRECIPITATION_POINTS_ADJUSTMENT
+    if (weather.get("snowfall") or 0) > 0:
+        adjustment += SNOWFALL_POINTS_ADJUSTMENT
+    return adjustment
+
+
 def score_total(predicted_total: float, market_total: float, std: float = TOTAL_STD_DEV) -> dict:
     """Compute edge and cover probability for the over/under, mirroring score_game's spread logic."""
     edge = predicted_total - market_total
@@ -477,7 +611,8 @@ def score_moneyline(home: str, away: str, home_rating: float, away_rating: float
 
 def build_picks(ratings: dict, games: list[dict], provider: str = DEFAULT_PROVIDER,
                  home_field: float = DEFAULT_HOME_FIELD, std: float = SPREAD_STD_DEV,
-                 game_info: dict | None = None, scoring_stats: dict | None = None) -> pd.DataFrame:
+                 game_info: dict | None = None, scoring_stats: dict | None = None,
+                 adjusted_metrics: dict | None = None, game_weather: dict | None = None) -> pd.DataFrame:
     """
     Build the full picks DataFrame from SP+ ratings and a list of game/line dicts.
 
@@ -489,7 +624,17 @@ def build_picks(ratings: dict, games: list[dict], provider: str = DEFAULT_PROVID
     scoring_stats, if provided (see get_team_scoring_stats), adds total-points (over/under)
     columns when the line has a market total and both teams have scoring data. Moneyline
     columns are added whenever the line includes moneylines, independent of scoring_stats.
+
+    adjusted_metrics (see get_adjusted_team_metrics) and game_weather (see get_game_weather)
+    are optional refinements to the predicted total — see adjusted_total_delta() and
+    weather_total_adjustment(). Both require a CFBD tier with the relevant feature access;
+    if either is unavailable, its adjustment is simply skipped (predicted_total falls back
+    to the unadjusted blended-average estimate).
     """
+    league_avg_offense, league_avg_defense_allowed = (
+        league_average_adjusted_metrics(adjusted_metrics) if adjusted_metrics else (0.0, 0.0)
+    )
+
     rows = []
     for game in games:
         line = pick_line(game, provider)
@@ -512,7 +657,18 @@ def build_picks(ratings: dict, games: list[dict], provider: str = DEFAULT_PROVID
         if market_total is not None and scoring_stats is not None:
             predicted_total = predict_total(scoring_stats.get(home), scoring_stats.get(away))
             if predicted_total is not None:
+                opponent_adj = None
+                if adjusted_metrics is not None:
+                    opponent_adj = adjusted_total_delta(adjusted_metrics.get(home), adjusted_metrics.get(away),
+                                                          league_avg_offense, league_avg_defense_allowed)
+                    predicted_total += opponent_adj or 0.0
+                weather_adj = None
+                if game_weather is not None:
+                    weather_adj = weather_total_adjustment(game_weather.get((home, away)))
+                    predicted_total += weather_adj
                 row.update(score_total(predicted_total, float(market_total)))
+                row["opponent_adjustment"] = round(opponent_adj, 1) if opponent_adj is not None else None
+                row["weather_adjustment"] = round(weather_adj, 1) if weather_adj is not None else None
 
         ml_result = score_moneyline(home, away, ratings[home], ratings[away],
                                      line.get("home_moneyline"), line.get("away_moneyline"),

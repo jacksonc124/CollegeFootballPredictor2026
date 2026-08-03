@@ -258,17 +258,41 @@ def get_rankings(yr, wk, stype):
     return model.get_rankings(bearer_token, yr, wk, stype)
 
 
+@st.cache_data(show_spinner=False, ttl=3600)
+def get_game_weather(yr, wk, stype):
+    # Requires CFBD's "weather" feature (Tier 1+). Degrades to no adjustment on lower tiers
+    # rather than breaking the whole app.
+    try:
+        return model.get_game_weather(bearer_token, yr, wk, stype)
+    except Exception as e:
+        print(f"Warning: failed to fetch weather (requires CFBD Tier 1+ 'weather' access): {e}")
+        return {}
+
+
+@st.cache_data(show_spinner=False, ttl=21600)
+def get_adjusted_metrics(yr):
+    # Requires CFBD's "adjustedMetrics" feature (Tier 1+). Same graceful degradation as weather.
+    try:
+        return model.get_adjusted_team_metrics(bearer_token, yr)
+    except Exception as e:
+        print(f"Warning: failed to fetch adjusted metrics (requires CFBD Tier 1+ 'adjustedMetrics' access): {e}")
+        return {}
+
+
 # ── Fetch ─────────────────────────────────────────────────────────────────────
 with st.spinner("Fetching ratings, lines, and logos…"):
     try:
-        ratings       = get_sp_ratings(year)
-        games         = get_weekly_lines(year, api_week, season_type)
-        game_info     = get_game_info(year, api_week, season_type)
-        scoring_stats = get_scoring_stats(year)
-        rankings      = get_rankings(year, api_week, season_type)
-        df            = model.build_picks(ratings, games, model.DEFAULT_PROVIDER, home_field, model.SPREAD_STD_DEV,
-                                           game_info=game_info, scoring_stats=scoring_stats)
-        logos         = get_team_logos(year)
+        ratings          = get_sp_ratings(year)
+        games            = get_weekly_lines(year, api_week, season_type)
+        game_info        = get_game_info(year, api_week, season_type)
+        scoring_stats    = get_scoring_stats(year)
+        rankings         = get_rankings(year, api_week, season_type)
+        game_weather     = get_game_weather(year, api_week, season_type)
+        adjusted_metrics = get_adjusted_metrics(year)
+        df               = model.build_picks(ratings, games, model.DEFAULT_PROVIDER, home_field, model.SPREAD_STD_DEV,
+                                              game_info=game_info, scoring_stats=scoring_stats,
+                                              adjusted_metrics=adjusted_metrics, game_weather=game_weather)
+        logos            = get_team_logos(year)
     except Exception as e:
         st.error(f"API error: {e}")
         st.stop()
@@ -610,11 +634,13 @@ with tab3:
     st.markdown("## 💰 Moneylines & Over/Under")
     st.caption("Moneyline edge = model win probability vs. the market's vig-removed implied probability.")
     st.info(
-        "ℹ️ **Over/Under is informational only — no model pick.** The rest of this app predicts "
-        "*margin* (SP+ vs. market spread); total points is a different, noisier thing to predict "
-        "and needs its own signal. The 'Predicted Total' column below comes from a simple blended "
-        "estimate (each team's own scoring average blended with their opponent's average points "
-        "allowed) — treat it as a rough guide, not a calibrated model like the spread picks.",
+        "ℹ️ **Over/Under is a rough estimate, not a calibrated pick like the spread picks.** Base "
+        "prediction blends each team's scoring average with their opponent's average points allowed, "
+        "then adjusts for opponent-adjusted EPA/play (CFBD's adjustedMetrics) and weather (wind above "
+        "15mph, precipitation, snow). The adjustments use real signal, but the conversion factors "
+        "(EPA→points, wind→points) are disclosed heuristics, not empirically fit — see 'Opp Adj' and "
+        "'Weather Adj' below for how much each moved the number, and treat the total as directional, "
+        "not precise.",
         icon="ℹ️",
     )
 
@@ -655,14 +681,23 @@ with tab3:
     if total_df.empty:
         st.info("No over/under lines available, or no scoring data yet to build a predicted total.")
     else:
+        total_cols = ["home_team", "away_team", "market_total", "predicted_total",
+                      "total_edge", "total_pick", "total_cover_prob"]
+        rename_map = {
+            "home_team": "Home", "away_team": "Away", "market_total": "Market O/U",
+            "predicted_total": "Predicted Total", "total_edge": "Edge (pts)",
+            "total_pick": "Pick", "total_cover_prob": "Cover Prob",
+        }
+        if "opponent_adjustment" in total_df.columns:
+            total_cols.append("opponent_adjustment")
+            rename_map["opponent_adjustment"] = "Opp Adj"
+        if "weather_adjustment" in total_df.columns:
+            total_cols.append("weather_adjustment")
+            rename_map["weather_adjustment"] = "Weather Adj"
+
         total_display = (
-            total_df[["home_team", "away_team", "market_total", "predicted_total",
-                      "total_edge", "total_pick", "total_cover_prob"]]
-            .rename(columns={
-                "home_team": "Home", "away_team": "Away", "market_total": "Market O/U",
-                "predicted_total": "Predicted Total", "total_edge": "Edge (pts)",
-                "total_pick": "Pick", "total_cover_prob": "Cover Prob",
-            })
+            total_df[total_cols]
+            .rename(columns=rename_map)
             .sort_values("Edge (pts)", key=lambda s: s.abs(), ascending=False)
             .reset_index(drop=True)
         )
@@ -672,6 +707,10 @@ with tab3:
             total_display, use_container_width=True, hide_index=True,
             column_config={
                 "Cover Prob": st.column_config.ProgressColumn("Cover Prob", min_value=0.0, max_value=1.0),
+                "Opp Adj": st.column_config.NumberColumn("Opp Adj", format="%+.1f",
+                                                          help="Points added/removed by opponent-adjusted EPA"),
+                "Weather Adj": st.column_config.NumberColumn("Weather Adj", format="%+.1f",
+                                                              help="Points removed for wind/precipitation/snow"),
             },
         )
 
