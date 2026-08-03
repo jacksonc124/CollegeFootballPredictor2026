@@ -488,21 +488,57 @@ def strong_picks(df: pd.DataFrame, edge_threshold: float = EDGE_THRESHOLD,
     ]
 
 
+def top_stat_leaders(rows: list[dict], stat_type: str, top_n: int = 10) -> pd.DataFrame:
+    """
+    Rank players within one category by one stat_type (e.g. rushing "YDS", passing "TD").
+    Unlike build_stat_leaderboard, this doesn't blend categories, so it's the fair way to
+    surface non-QB leaders — a composite cross-position score structurally favors QBs (see
+    PASSING_YARD_WEIGHT below), but "top rusher by yards" needs no such adjustment.
+
+    rows is a list of {"player", "team", "position", "stat_type", "stat"} dicts as returned
+    by get_player_season_stats, all from a single category. Returns columns: player, team,
+    position, value — sorted descending, top_n rows.
+    """
+    parsed = []
+    for r in rows:
+        if r["stat_type"] != stat_type:
+            continue
+        try:
+            value = float(r["stat"])
+        except (TypeError, ValueError):
+            continue
+        parsed.append({"player": r["player"], "team": r["team"], "position": r["position"], "value": value})
+
+    if not parsed:
+        return pd.DataFrame()
+
+    return pd.DataFrame(parsed).sort_values("value", ascending=False).head(top_n).reset_index(drop=True)
+
+
+# A passing yard takes two players (QB's arm + receiver's catch/run) vs. one for a rushing
+# or receiving yard, so weighting them equally in a cross-position score structurally
+# buries every RB/WR under QBs who throw for 3,000+ yards a season. Halving passing yards'
+# weight is a common informal convention for cross-position "total production" comparisons.
+PASSING_YARD_WEIGHT = 0.5
+
+
 def build_stat_leaderboard(passing: list[dict], rushing: list[dict], receiving: list[dict],
                             top_n: int = 10) -> pd.DataFrame:
     """
     Simple stat-based offensive leaderboard — NOT real Heisman odds. CFBD has no
     awards-odds market data (no book prices a Heisman futures line through this API),
-    so this is a composite of real season stats instead: total yards + 6 points per TD,
-    summed across passing/rushing/receiving. That's a common informal "total production"
-    heuristic, not a calibrated prediction — see app.py's caption for the same caveat
-    surfaced to the user.
+    so this is a composite of real season stats instead: (PASSING_YARD_WEIGHT * passing
+    yards) + rushing yards + receiving yards + 6 points per TD. That's a common informal
+    "total production" heuristic, not a calibrated prediction — see app.py's caption for
+    the same caveat surfaced to the user, and PASSING_YARD_WEIGHT's comment above for why
+    passing yards aren't weighted 1:1 with rushing/receiving yards.
 
     Each input is a list of {"player", "team", "position", "stat_type", "stat"} dicts as
     returned by get_player_season_stats (only "YDS" and "TD" stat_types are used; others,
     e.g. completions/attempts/long, are ignored). Returns a DataFrame sorted by score
     descending, truncated to top_n, with columns: player, team, position, pass_yds,
-    pass_td, rush_yds, rush_td, rec_yds, rec_td, total_yards, total_td, score.
+    pass_td, rush_yds, rush_td, rec_yds, rec_td, total_yards (the true, unweighted sum —
+    for display), total_td, score (the weighted ranking metric).
     """
     totals: dict[str, dict] = {}
 
@@ -535,7 +571,7 @@ def build_stat_leaderboard(passing: list[dict], rushing: list[dict], receiving: 
     for t in totals.values():
         total_yards = t["pass_yds"] + t["rush_yds"] + t["rec_yds"]
         total_td = t["pass_td"] + t["rush_td"] + t["rec_td"]
-        rows.append({**t, "total_yards": total_yards, "total_td": total_td,
-                     "score": total_yards + 6 * total_td})
+        score = (PASSING_YARD_WEIGHT * t["pass_yds"] + t["rush_yds"] + t["rec_yds"]) + 6 * total_td
+        rows.append({**t, "total_yards": total_yards, "total_td": total_td, "score": score})
 
     return pd.DataFrame(rows).sort_values("score", ascending=False).head(top_n).reset_index(drop=True)

@@ -748,3 +748,43 @@ with tab6:
                                                         help="Total yards + 6 × total TDs"),
             },
         )
+
+    st.markdown("---")
+    st.markdown("#### Category leaders")
+    st.caption("Ranked within their own stat — unlike Heisman Watch above, these aren't blended "
+               "across categories, so rushers and receivers show up here on equal footing with passers.")
+
+    def render_leader_table(rows, stat_type, value_label):
+        leaders = model.top_stat_leaders(rows, stat_type, top_n=5)
+        if leaders.empty:
+            st.caption("No data.")
+            return
+        st.dataframe(
+            leaders.rename(columns={"player": "Player", "team": "Team", "position": "Pos", "value": value_label}),
+            use_container_width=True, hide_index=True,
+            column_config={value_label: st.column_config.NumberColumn(value_label, format="%.0f")},
+        )
+
+    p1, p2 = st.columns(2)
+    with p1:
+        st.markdown("**Passing Yards**")
+        render_leader_table(passing_stats, "YDS", "Yards")
+    with p2:
+        st.markdown("**Passing TDs**")
+        render_leader_table(passing_stats, "TD", "TDs")
+
+    r1, r2 = st.columns(2)
+    with r1:
+        st.markdown("**Rushing Yards**")
+        render_leader_table(rushing_stats, "YDS", "Yards")
+    with r2:
+        st.markdown("**Rushing TDs**")
+        render_leader_table(rushing_stats, "TD", "TDs")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Receiving Yards**")
+        render_leader_table(receiving_stats, "YDS", "Yards")
+    with c2:
+        st.markdown("**Receiving TDs**")
+        render_leader_table(receiving_stats, "TD", "TDs")

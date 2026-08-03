@@ -283,6 +283,37 @@ def test_build_picks_no_moneyline_columns_when_line_lacks_them():
     assert "ml_pick_team" not in df.columns
 
 
+# ---------- Per-category stat leaders ----------
+
+def test_top_stat_leaders_ranks_by_requested_stat_type():
+    rows = [
+        {"player": "RB1", "team": "A", "position": "RB", "stat_type": "YDS", "stat": "1200"},
+        {"player": "RB2", "team": "B", "position": "RB", "stat_type": "YDS", "stat": "1800"},
+        {"player": "RB3", "team": "C", "position": "RB", "stat_type": "TD", "stat": "25"},  # different stat_type
+    ]
+    leaders = model.top_stat_leaders(rows, "YDS", top_n=10)
+    assert list(leaders["player"]) == ["RB2", "RB1"]
+    assert leaders.iloc[0]["value"] == 1800
+
+
+def test_top_stat_leaders_respects_top_n():
+    rows = [{"player": f"P{i}", "team": "A", "position": "WR", "stat_type": "YDS", "stat": str(i)}
+            for i in range(5)]
+    leaders = model.top_stat_leaders(rows, "YDS", top_n=2)
+    assert len(leaders) == 2
+    assert leaders.iloc[0]["player"] == "P4"
+
+
+def test_top_stat_leaders_empty_when_stat_type_not_present():
+    rows = [{"player": "P1", "team": "A", "position": "WR", "stat_type": "TD", "stat": "5"}]
+    assert model.top_stat_leaders(rows, "YDS").empty
+
+
+def test_top_stat_leaders_ignores_unparseable_values():
+    rows = [{"player": "P1", "team": "A", "position": "WR", "stat_type": "YDS", "stat": "--"}]
+    assert model.top_stat_leaders(rows, "YDS").empty
+
+
 # ---------- Stat leaderboard ----------
 
 def test_build_stat_leaderboard_combines_categories_and_scores():
@@ -306,17 +337,33 @@ def test_build_stat_leaderboard_combines_categories_and_scores():
     board = model.build_stat_leaderboard(passing, rushing, receiving, top_n=10)
 
     qb1 = board[board["player"] == "QB1"].iloc[0]
-    assert qb1["total_yards"] == 3500
+    assert qb1["total_yards"] == 3500  # unweighted, for display
     assert qb1["total_td"] == 35
-    assert qb1["score"] == 3500 + 6 * 35
+    assert qb1["score"] == 0.5 * 3000 + 500 + 6 * 35  # passing yards weighted, rushing yards aren't
 
     rb1 = board[board["player"] == "RB1"].iloc[0]
     assert rb1["total_yards"] == 1700
     assert rb1["total_td"] == 20
-    assert rb1["score"] == 1700 + 6 * 20
+    assert rb1["score"] == 1700 + 6 * 20  # no passing yards, so weighting doesn't affect RB1
 
     # QB1's score is higher, so it should rank first.
     assert board.iloc[0]["player"] == "QB1"
+
+
+def test_build_stat_leaderboard_weights_passing_so_non_qbs_can_outrank_qbs():
+    # Under an unweighted sum, a QB's raw passing yardage makes it nearly impossible for
+    # any RB/WR to rank above them, which is why the leaderboard used to be all QBs.
+    passing = [
+        {"player": "QB1", "team": "A", "position": "QB", "stat_type": "YDS", "stat": "4000"},
+        {"player": "QB1", "team": "A", "position": "QB", "stat_type": "TD", "stat": "30"},
+    ]
+    rushing = [
+        {"player": "RB1", "team": "B", "position": "RB", "stat_type": "YDS", "stat": "2200"},
+        {"player": "RB1", "team": "B", "position": "RB", "stat_type": "TD", "stat": "28"},
+    ]
+
+    board = model.build_stat_leaderboard(passing, rushing, [], top_n=10)
+    assert board.iloc[0]["player"] == "RB1"
 
 
 def test_build_stat_leaderboard_respects_top_n():
