@@ -132,6 +132,18 @@ st.markdown("""
     }
 
     .fetch-caption { font-size: 12px; opacity: 0.6; margin-top: 4px; }
+
+    /* Streamlit stacks st.columns() vertically below ~640px by default, which turns the
+       −/legs/+ stepper into three separate full-width rows on mobile. Force just this row
+       to stay horizontal so it remains a compact stepper instead of eating vertical space. */
+    [data-testid="stHorizontalBlock"]:has(.leg-display) {
+        flex-direction: row !important;
+    }
+    [data-testid="stHorizontalBlock"]:has(.leg-display) > div {
+        width: auto !important;
+        flex: 1 1 0 !important;
+        min-width: 0 !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
