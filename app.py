@@ -406,18 +406,21 @@ with tab1:
 
 
 # ── TAB 2: Parlays ────────────────────────────────────────────────────────────
-def build_parlay_leg_pool(df_inner: pd.DataFrame) -> pd.DataFrame:
+def build_parlay_leg_pool(df_inner: pd.DataFrame, ats_tiers=("A", "B"),
+                           ml_edge_threshold: float = model.ML_EDGE_THRESHOLD) -> pd.DataFrame:
     """
-    Unify Tier A/B ATS picks and high-value moneyline picks into one candidate-leg
-    pool, so parlays can mix bet types. Each leg keeps its originating (home, away)
-    game so combos can be filtered to one leg per game (see render_parlay_tab).
+    Unify ATS picks (from ats_tiers) and moneyline picks with edge >= ml_edge_threshold
+    into one candidate-leg pool, so parlays can mix bet types. Each leg keeps its
+    originating (home, away) game so combos can be filtered to one leg per game
+    (see render_parlay_tab). Pass ats_tiers=() or ml_edge_threshold=inf to exclude a
+    bet type entirely.
     """
     # leg_odds carries each leg's real American odds so parlay payout is computed from
     # actual odds per leg instead of assuming every leg is standard -110 juice — a heavy
     # moneyline favorite pays far less than -110 would imply (see model.american_to_decimal_odds).
     leg_cols = ["home_team", "away_team", "leg_type", "leg_team", "leg_prob", "leg_label", "leg_detail", "leg_odds"]
 
-    ats_legs = df_inner[df_inner["tier"].isin(["A", "B"]) & (df_inner["pick_team"] != "")].copy()
+    ats_legs = df_inner[df_inner["tier"].isin(ats_tiers) & (df_inner["pick_team"] != "")].copy()
     ats_legs["leg_type"] = "ATS"
     ats_legs["leg_team"] = ats_legs["pick_team"]
     ats_legs["leg_prob"] = ats_legs["cover_prob"]
@@ -430,7 +433,7 @@ def build_parlay_leg_pool(df_inner: pd.DataFrame) -> pd.DataFrame:
     if "ml_pick_team" in df_inner.columns:
         ml_legs = df_inner[
             df_inner["ml_pick_team"].notna() & (df_inner["ml_pick_team"] != "")
-            & (df_inner["ml_edge"] >= model.ML_EDGE_THRESHOLD)
+            & (df_inner["ml_edge"] >= ml_edge_threshold)
         ].copy()
         if not ml_legs.empty:
             ml_legs["leg_type"] = "ML"
@@ -449,9 +452,8 @@ def build_parlay_leg_pool(df_inner: pd.DataFrame) -> pd.DataFrame:
 @st.fragment
 def render_parlay_tab(df_inner):
     st.markdown("## 🎰 Team Parlays")
-    st.caption("Built from Tier A/B ATS picks and high-value moneylines "
-               f"(edge ≥ {model.ML_EDGE_THRESHOLD:.0%}) · Combined prob = product of leg probabilities "
-               "· Payout uses each leg's real odds (−110 assumed for ATS/O-U, actual moneyline for ML legs)")
+    st.caption("Combined prob = product of leg probabilities · Payout uses each leg's real odds "
+               "(−110 assumed for ATS/O-U, actual moneyline for ML legs)")
     st.caption("⚠️ Each combo uses at most one leg per game (no stacking an ATS and moneyline pick on "
                "the same matchup), but legs from *different* games are still assumed independent — "
                "correlated results (e.g. conference-wide trends) aren't modeled.")
@@ -478,6 +480,25 @@ def render_parlay_tab(df_inner):
         st.button("+", key="legs_plus", on_click=inc_legs,
                   use_container_width=True, disabled=(st.session_state["parlay_legs"] >= 6))
 
+    with st.expander("⚙️ Customize"):
+        cc1, cc2 = st.columns(2)
+        with cc1:
+            include_types = st.multiselect("Bet Types", ["ATS", "ML"], default=["ATS", "ML"],
+                                            key="parlay_bet_types")
+            ats_tiers = st.multiselect("ATS Tiers", ["A", "B", "C"], default=["A", "B"],
+                                        help="Tier C picks have a smaller edge/lower cover probability — "
+                                             "riskier legs than the default A/B.",
+                                        key="parlay_ats_tiers")
+        with cc2:
+            ml_edge_pct = st.slider("Min Moneyline Edge", min_value=0, max_value=30,
+                                     value=int(model.ML_EDGE_THRESHOLD * 100), step=1, format="%d%%",
+                                     help="Model win probability minus the market's vig-removed "
+                                          "implied probability. Lower = more moneyline legs qualify.",
+                                     key="parlay_ml_edge_pct")
+            min_payout = st.number_input("Minimum Payout", min_value=1.0, max_value=50.0, value=1.0, step=0.5,
+                                          help="Hide any combo paying out less than this multiplier.",
+                                          key="parlay_min_payout")
+
     leg_count = st.session_state["parlay_legs"]
     # Deliberately wider than just the safest legs — sorting by probability alone and
     # taking a small pool meant every parlay ended up all heavy-favorite moneylines,
@@ -486,12 +507,16 @@ def render_parlay_tab(df_inner):
     # below: "Safest" vs. "Higher Payout").
     pool_size = leg_count + 12
 
-    leg_pool = build_parlay_leg_pool(df_inner)
+    leg_pool = build_parlay_leg_pool(df_inner, tuple(ats_tiers), ml_edge_pct / 100)
+    if include_types:
+        leg_pool = leg_pool[leg_pool["leg_type"].isin(include_types)]
+    else:
+        leg_pool = leg_pool.iloc[0:0]
     parlay_pool = leg_pool.sort_values("leg_prob", ascending=False).head(pool_size).reset_index(drop=True)
 
     if len(parlay_pool) < leg_count:
-        st.info(f"Not enough Tier A/B ATS or high-value moneyline picks for a {leg_count}-leg parlay. "
-                f"Try reducing legs.")
+        st.info(f"Not enough qualifying picks for a {leg_count}-leg parlay with the current filters. "
+                f"Try reducing legs, widening ATS Tiers, or lowering Min Moneyline Edge.")
         return
 
     probs = parlay_pool["leg_prob"].to_numpy()
@@ -507,12 +532,14 @@ def render_parlay_tab(df_inner):
         for i in c:
             joint_prob *= probs[i]
             payout *= decimal_odds[i]
+        if payout < min_payout:
+            continue
         parlay_rows.append({"joint_prob": round(joint_prob, 4), "payout": round(payout, 2),
                              "legs": parlay_pool.iloc[list(c)]})
 
     if not parlay_rows:
-        st.info(f"No valid {leg_count}-leg combos — the top picks are too concentrated in the same games. "
-                f"Try reducing legs.")
+        st.info(f"No {leg_count}-leg combos meet the current filters (try lowering Minimum Payout, "
+                f"reducing legs, or widening ATS Tiers / Min Moneyline Edge).")
         return
 
     def render_parlay_cards(rows, title, subtitle):
