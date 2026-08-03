@@ -713,37 +713,49 @@ with tab5:
         icon="⚠️",
     )
 
-    with st.spinner("Backtesting every completed week of the season…"):
-        graded = get_season_backtest(year)
+    if "accuracy_loaded_year" not in st.session_state:
+        st.session_state["accuracy_loaded_year"] = None
+    is_loaded = st.session_state["accuracy_loaded_year"] == year
 
-    if graded.empty:
-        st.info("No completed games with results yet for this season.")
+    if not is_loaded:
+        st.info(f"This checks results for every completed week of {year} — up to ~3× the API calls the "
+                f"rest of the app uses combined. It's cached afterward (6 hours), so this only costs "
+                f"quota on the first run per season.")
+        if st.button("🔄 Run Season Backtest", key="run_accuracy"):
+            st.session_state["accuracy_loaded_year"] = year
+            st.rerun()
     else:
-        acc = backtest.overall_accuracy(graded)
-        a1, a2, a3, a4 = st.columns(4)
-        a1.metric("Graded Picks", acc["n"])
-        a2.metric("Win Rate", f"{acc['win_rate']:.1%}" if acc["win_rate"] is not None else "—")
-        a3.metric("Wins / Losses", f"{acc['wins']} / {acc['losses']}")
-        a4.metric("Pushes", acc["pushes"])
+        with st.spinner("Backtesting every completed week of the season…"):
+            graded = get_season_backtest(year)
 
-        st.markdown("#### Calibration by tier")
-        st.caption("Predicted cover probability vs. actual win rate — a well-calibrated tier has these close together.")
-        tier_summary = backtest.summarize_by_tier(graded)
-        st.dataframe(
-            tier_summary.rename(columns={
-                "tier": "Tier", "n": "N", "wins": "Wins",
-                "avg_predicted_cover_prob": "Predicted Cover Prob", "actual_win_rate": "Actual Win Rate",
-            }),
-            use_container_width=True, hide_index=True,
-            column_config={
-                "Predicted Cover Prob": st.column_config.ProgressColumn("Predicted Cover Prob", min_value=0.0, max_value=1.0),
-                "Actual Win Rate": st.column_config.ProgressColumn("Actual Win Rate", min_value=0.0, max_value=1.0),
-            },
-        )
+        if graded.empty:
+            st.info("No completed games with results yet for this season.")
+        else:
+            acc = backtest.overall_accuracy(graded)
+            a1, a2, a3, a4 = st.columns(4)
+            a1.metric("Graded Picks", acc["n"])
+            a2.metric("Win Rate", f"{acc['win_rate']:.1%}" if acc["win_rate"] is not None else "—")
+            a3.metric("Wins / Losses", f"{acc['wins']} / {acc['losses']}")
+            a4.metric("Pushes", acc["pushes"])
 
-        st.markdown("#### Win rate by week")
-        week_summary = backtest.summarize_by_week(graded).set_index("week")
-        st.bar_chart(week_summary["win_rate"], height=220, use_container_width=True)
+            st.markdown("#### Calibration by tier")
+            st.caption("Predicted cover probability vs. actual win rate — a well-calibrated tier has these close together.")
+            tier_summary = backtest.summarize_by_tier(graded)
+            st.dataframe(
+                tier_summary.rename(columns={
+                    "tier": "Tier", "n": "N", "wins": "Wins",
+                    "avg_predicted_cover_prob": "Predicted Cover Prob", "actual_win_rate": "Actual Win Rate",
+                }),
+                use_container_width=True, hide_index=True,
+                column_config={
+                    "Predicted Cover Prob": st.column_config.ProgressColumn("Predicted Cover Prob", min_value=0.0, max_value=1.0),
+                    "Actual Win Rate": st.column_config.ProgressColumn("Actual Win Rate", min_value=0.0, max_value=1.0),
+                },
+            )
+
+            st.markdown("#### Win rate by week")
+            week_summary = backtest.summarize_by_week(graded).set_index("week")
+            st.bar_chart(week_summary["win_rate"], height=220, use_container_width=True)
 
 
 # ── TAB 6: Stats ───────────────────────────────────────────────────────────────
@@ -766,80 +778,91 @@ with tab6:
         icon="ℹ️",
     )
 
-    with st.spinner("Fetching player season stats…"):
-        try:
-            passing_stats = get_player_season_stats(year, "passing")
-            rushing_stats = get_player_season_stats(year, "rushing")
-            receiving_stats = get_player_season_stats(year, "receiving")
-        except Exception as e:
-            st.error(f"API error: {e}")
-            passing_stats, rushing_stats, receiving_stats = [], [], []
+    if "stats_loaded_year" not in st.session_state:
+        st.session_state["stats_loaded_year"] = None
+    stats_loaded = st.session_state["stats_loaded_year"] == year
 
-    # get_player_season_stats has no classification filter (unlike the Games API), so it
-    # returns every division mixed together. Filter to FBS using the team names already
-    # fetched for logos — matches the rest of the app, which is FBS-only throughout.
-    fbs_teams = set(logos.keys())
-    if fbs_teams:
-        passing_stats = [r for r in passing_stats if r["team"] in fbs_teams]
-        rushing_stats = [r for r in rushing_stats if r["team"] in fbs_teams]
-        receiving_stats = [r for r in receiving_stats if r["team"] in fbs_teams]
-
-    leaderboard = model.build_stat_leaderboard(passing_stats, rushing_stats, receiving_stats, top_n=10)
-
-    if leaderboard.empty:
-        st.info("No player stats available yet for this season.")
+    if not stats_loaded:
+        st.info(f"Fetches passing/rushing/receiving stats for every FBS player in {year} (3 API calls, "
+                f"cached afterward for 1 hour).")
+        if st.button("📊 Load Player Stats", key="run_stats"):
+            st.session_state["stats_loaded_year"] = year
+            st.rerun()
     else:
-        st.markdown("#### 🏈 Heisman Watch — Top 10 by Total Production")
-        display = leaderboard[["player", "team", "position", "total_yards", "total_td", "score"]].rename(columns={
-            "player": "Player", "team": "Team", "position": "Pos",
-            "total_yards": "Total Yards", "total_td": "Total TDs", "score": "Score",
-        })
-        st.dataframe(
-            display, use_container_width=True, hide_index=True,
-            column_config={
-                "Total Yards": st.column_config.NumberColumn("Total Yards", format="%.0f"),
-                "Total TDs": st.column_config.NumberColumn("Total TDs", format="%.0f"),
-                "Score": st.column_config.NumberColumn("Score", format="%.0f",
-                                                        help="Total yards + 6 × total TDs"),
-            },
-        )
+        with st.spinner("Fetching player season stats…"):
+            try:
+                passing_stats = get_player_season_stats(year, "passing")
+                rushing_stats = get_player_season_stats(year, "rushing")
+                receiving_stats = get_player_season_stats(year, "receiving")
+            except Exception as e:
+                st.error(f"API error: {e}")
+                passing_stats, rushing_stats, receiving_stats = [], [], []
 
-    st.markdown("---")
-    st.markdown("#### Category leaders")
-    st.caption("Ranked within their own stat — unlike Heisman Watch above, these aren't blended "
-               "across categories, so rushers and receivers show up here on equal footing with passers.")
+        # get_player_season_stats has no classification filter (unlike the Games API), so it
+        # returns every division mixed together. Filter to FBS using the team names already
+        # fetched for logos — matches the rest of the app, which is FBS-only throughout.
+        fbs_teams = set(logos.keys())
+        if fbs_teams:
+            passing_stats = [r for r in passing_stats if r["team"] in fbs_teams]
+            rushing_stats = [r for r in rushing_stats if r["team"] in fbs_teams]
+            receiving_stats = [r for r in receiving_stats if r["team"] in fbs_teams]
 
-    def render_leader_table(rows, stat_type, value_label):
-        leaders = model.top_stat_leaders(rows, stat_type, top_n=5)
-        if leaders.empty:
-            st.caption("No data.")
-            return
-        st.dataframe(
-            leaders.rename(columns={"player": "Player", "team": "Team", "position": "Pos", "value": value_label}),
-            use_container_width=True, hide_index=True,
-            column_config={value_label: st.column_config.NumberColumn(value_label, format="%.0f")},
-        )
+        leaderboard = model.build_stat_leaderboard(passing_stats, rushing_stats, receiving_stats, top_n=10)
 
-    p1, p2 = st.columns(2)
-    with p1:
-        st.markdown("**Passing Yards**")
-        render_leader_table(passing_stats, "YDS", "Yards")
-    with p2:
-        st.markdown("**Passing TDs**")
-        render_leader_table(passing_stats, "TD", "TDs")
+        if leaderboard.empty:
+            st.info("No player stats available yet for this season.")
+        else:
+            st.markdown("#### 🏈 Heisman Watch — Top 10 by Total Production")
+            display = leaderboard[["player", "team", "position", "total_yards", "total_td", "score"]].rename(columns={
+                "player": "Player", "team": "Team", "position": "Pos",
+                "total_yards": "Total Yards", "total_td": "Total TDs", "score": "Score",
+            })
+            st.dataframe(
+                display, use_container_width=True, hide_index=True,
+                column_config={
+                    "Total Yards": st.column_config.NumberColumn("Total Yards", format="%.0f"),
+                    "Total TDs": st.column_config.NumberColumn("Total TDs", format="%.0f"),
+                    "Score": st.column_config.NumberColumn("Score", format="%.0f",
+                                                            help="Total yards + 6 × total TDs"),
+                },
+            )
 
-    r1, r2 = st.columns(2)
-    with r1:
-        st.markdown("**Rushing Yards**")
-        render_leader_table(rushing_stats, "YDS", "Yards")
-    with r2:
-        st.markdown("**Rushing TDs**")
-        render_leader_table(rushing_stats, "TD", "TDs")
+        st.markdown("---")
+        st.markdown("#### Category leaders")
+        st.caption("Ranked within their own stat — unlike Heisman Watch above, these aren't blended "
+                   "across categories, so rushers and receivers show up here on equal footing with passers.")
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown("**Receiving Yards**")
-        render_leader_table(receiving_stats, "YDS", "Yards")
-    with c2:
-        st.markdown("**Receiving TDs**")
-        render_leader_table(receiving_stats, "TD", "TDs")
+        def render_leader_table(rows, stat_type, value_label):
+            leaders = model.top_stat_leaders(rows, stat_type, top_n=5)
+            if leaders.empty:
+                st.caption("No data.")
+                return
+            st.dataframe(
+                leaders.rename(columns={"player": "Player", "team": "Team", "position": "Pos", "value": value_label}),
+                use_container_width=True, hide_index=True,
+                column_config={value_label: st.column_config.NumberColumn(value_label, format="%.0f")},
+            )
+
+        p1, p2 = st.columns(2)
+        with p1:
+            st.markdown("**Passing Yards**")
+            render_leader_table(passing_stats, "YDS", "Yards")
+        with p2:
+            st.markdown("**Passing TDs**")
+            render_leader_table(passing_stats, "TD", "TDs")
+
+        r1, r2 = st.columns(2)
+        with r1:
+            st.markdown("**Rushing Yards**")
+            render_leader_table(rushing_stats, "YDS", "Yards")
+        with r2:
+            st.markdown("**Rushing TDs**")
+            render_leader_table(rushing_stats, "TD", "TDs")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**Receiving Yards**")
+            render_leader_table(receiving_stats, "YDS", "Yards")
+        with c2:
+            st.markdown("**Receiving TDs**")
+            render_leader_table(receiving_stats, "TD", "TDs")
