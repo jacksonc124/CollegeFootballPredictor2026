@@ -479,7 +479,12 @@ def render_parlay_tab(df_inner):
                   use_container_width=True, disabled=(st.session_state["parlay_legs"] >= 6))
 
     leg_count = st.session_state["parlay_legs"]
-    pool_size = leg_count + 4
+    # Deliberately wider than just the safest legs — sorting by probability alone and
+    # taking a small pool meant every parlay ended up all heavy-favorite moneylines,
+    # since those have the highest individual probability by construction. A wider pool
+    # keeps some higher-variance, higher-payout legs in the mix (see the two sections
+    # below: "Safest" vs. "Higher Payout").
+    pool_size = leg_count + 12
 
     leg_pool = build_parlay_leg_pool(df_inner)
     parlay_pool = leg_pool.sort_values("leg_prob", ascending=False).head(pool_size).reset_index(drop=True)
@@ -489,48 +494,62 @@ def render_parlay_tab(df_inner):
                 f"Try reducing legs.")
         return
 
-    # One leg per game: exclude combos where two legs share the same (home, away) matchup.
-    combos = [
-        c for c in itertools.combinations(parlay_pool.index, leg_count)
-        if parlay_pool.loc[list(c), ["home_team", "away_team"]].drop_duplicates().shape[0] == leg_count
-    ]
+    probs = parlay_pool["leg_prob"].to_numpy()
+    decimal_odds = parlay_pool["leg_odds"].map(model.american_to_decimal_odds).to_numpy()
+    games = list(zip(parlay_pool["home_team"], parlay_pool["away_team"]))
 
-    if not combos:
+    parlay_rows = []
+    for c in itertools.combinations(range(len(parlay_pool)), leg_count):
+        if len({games[i] for i in c}) != leg_count:
+            continue  # one leg per game
+        joint_prob = 1.0
+        payout = 1.0
+        for i in c:
+            joint_prob *= probs[i]
+            payout *= decimal_odds[i]
+        parlay_rows.append({"joint_prob": round(joint_prob, 4), "payout": round(payout, 2),
+                             "legs": parlay_pool.iloc[list(c)]})
+
+    if not parlay_rows:
         st.info(f"No valid {leg_count}-leg combos — the top picks are too concentrated in the same games. "
                 f"Try reducing legs.")
         return
 
-    parlay_rows = sorted(
-        [{"joint_prob": round(parlay_pool.loc[list(c), "leg_prob"].prod(), 4),
-          "payout": round(parlay_pool.loc[list(c), "leg_odds"].map(model.american_to_decimal_odds).prod(), 2),
-          "legs": parlay_pool.loc[list(c)]} for c in combos],
-        key=lambda x: x["joint_prob"], reverse=True,
-    )
-
-    all_html = ""
-    for i, p in enumerate(parlay_rows[:5]):
-        legs_html = ""
-        for _, leg in p["legs"].iterrows():
-            legs_html += (
-                f'<div class="parlay-leg">'
-                f'{logo_img(leg["leg_team"], 20)}&nbsp;<b>{leg["leg_label"]}</b>'
-                f'&nbsp;<span style="opacity:0.5">({leg["away_team"]} @ {leg["home_team"]})</span>'
-                f'&nbsp;&middot;&nbsp;Prob: <b style="color:#facc15">{leg["leg_prob"]:.1%}</b>'
-                f'&nbsp;&middot;&nbsp;{leg["leg_detail"]}'
-                f'</div>'
+    def render_parlay_cards(rows, title, subtitle):
+        st.markdown(f"#### {title}")
+        st.caption(subtitle)
+        all_html = ""
+        for i, p in enumerate(rows[:5]):
+            legs_html = ""
+            for _, leg in p["legs"].iterrows():
+                legs_html += (
+                    f'<div class="parlay-leg">'
+                    f'{logo_img(leg["leg_team"], 20)}&nbsp;<b>{leg["leg_label"]}</b>'
+                    f'&nbsp;<span style="opacity:0.5">({leg["away_team"]} @ {leg["home_team"]})</span>'
+                    f'&nbsp;&middot;&nbsp;Prob: <b style="color:#facc15">{leg["leg_prob"]:.1%}</b>'
+                    f'&nbsp;&middot;&nbsp;{leg["leg_detail"]}'
+                    f'</div>'
+                )
+            all_html += (
+                f'<div class="parlay-card">'
+                f'<div class="parlay-title">Parlay #{i + 1}'
+                f'&nbsp;<span style="font-size:14px;opacity:0.5;font-family:\'IBM Plex Mono\',monospace;">'
+                f'{leg_count}-leg</span></div>'
+                f'{legs_html}'
+                f'<div class="parlay-prob">'
+                f'Combined Probability: {p["joint_prob"]:.1%}'
+                f'&nbsp;&middot;&nbsp;Est. Payout: ~{p["payout"]}x'
+                f'</div></div>'
             )
-        all_html += (
-            f'<div class="parlay-card">'
-            f'<div class="parlay-title">Parlay #{i + 1}'
-            f'&nbsp;<span style="font-size:14px;opacity:0.5;font-family:\'IBM Plex Mono\',monospace;">'
-            f'{leg_count}-leg</span></div>'
-            f'{legs_html}'
-            f'<div class="parlay-prob">'
-            f'Combined Probability: {p["joint_prob"]:.1%}'
-            f'&nbsp;&middot;&nbsp;Est. Payout: ~{p["payout"]}x'
-            f'</div></div>'
-        )
-    st.markdown(all_html, unsafe_allow_html=True)
+        st.markdown(all_html, unsafe_allow_html=True)
+
+    safest = sorted(parlay_rows, key=lambda x: x["joint_prob"], reverse=True)
+    riskiest = sorted(parlay_rows, key=lambda x: x["payout"], reverse=True)
+
+    render_parlay_cards(safest, "🛡️ Safest", "Highest combined probability")
+    st.markdown("---")
+    render_parlay_cards(riskiest, "🎲 Higher Payout", "Highest payout among the same qualifying picks — "
+                                                       "lower probability, bigger swing if it hits")
 
 
 with tab2:
@@ -728,6 +747,15 @@ with tab6:
         except Exception as e:
             st.error(f"API error: {e}")
             passing_stats, rushing_stats, receiving_stats = [], [], []
+
+    # get_player_season_stats has no classification filter (unlike the Games API), so it
+    # returns every division mixed together. Filter to FBS using the team names already
+    # fetched for logos — matches the rest of the app, which is FBS-only throughout.
+    fbs_teams = set(logos.keys())
+    if fbs_teams:
+        passing_stats = [r for r in passing_stats if r["team"] in fbs_teams]
+        rushing_stats = [r for r in rushing_stats if r["team"] in fbs_teams]
+        receiving_stats = [r for r in receiving_stats if r["team"] in fbs_teams]
 
     leaderboard = model.build_stat_leaderboard(passing_stats, rushing_stats, receiving_stats, top_n=10)
 
