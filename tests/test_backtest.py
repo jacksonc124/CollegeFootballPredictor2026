@@ -1,6 +1,6 @@
 import pandas as pd
 
-from backtest import grade_pick, summarize_by_tier
+from backtest import grade_pick, overall_accuracy, summarize_by_tier, summarize_by_week
 
 
 def test_grade_pick_home_win_covers():
@@ -45,3 +45,31 @@ def test_summarize_by_tier_handles_no_decided_picks():
     graded = pd.DataFrame([{"tier": "A", "cover_prob": 0.6, "outcome": "push"}])
     summary = summarize_by_tier(graded)
     assert summary.empty
+
+
+def test_overall_accuracy_counts_and_win_rate():
+    graded = pd.DataFrame([
+        {"outcome": "win"}, {"outcome": "win"}, {"outcome": "loss"}, {"outcome": "push"},
+    ])
+    result = overall_accuracy(graded)
+    assert result == {"n": 3, "wins": 2, "losses": 1, "pushes": 1, "win_rate": 2 / 3}
+
+
+def test_overall_accuracy_handles_no_decided_picks():
+    graded = pd.DataFrame([{"outcome": "push"}, {"outcome": None}])
+    result = overall_accuracy(graded)
+    assert result["n"] == 0
+    assert result["win_rate"] is None
+
+
+def test_summarize_by_week_tracks_win_rate_per_week():
+    graded = pd.DataFrame([
+        {"week": 1, "outcome": "win"}, {"week": 1, "outcome": "win"}, {"week": 1, "outcome": "loss"},
+        {"week": 2, "outcome": "loss"}, {"week": 2, "outcome": "loss"},
+        {"week": 3, "outcome": "push"},  # excluded — no decided picks that week
+    ])
+    summary = summarize_by_week(graded).set_index("week")
+    assert summary.loc[1, "n"] == 3
+    assert round(summary.loc[1, "win_rate"], 3) == round(2 / 3, 3)
+    assert summary.loc[2, "win_rate"] == 0.0
+    assert 3 not in summary.index

@@ -1,9 +1,20 @@
 """
-Backtest the SP+ vs. market model against actual final scores for a past week.
+Backtest the SP+ vs. market model against actual final scores for a past week or season.
 
 Fetches completed game results from CFBD, grades each model pick against the
 spread (win/loss/push), and reports accuracy plus calibration (does the
 model's predicted cover probability match its actual win rate?) by tier.
+
+CAVEAT — look-ahead bias: CFBD's SP+ ratings endpoint returns one value per
+team per year (the fully-converged, end-of-season rating), not what was
+knowable at the time a given week was actually played. Backtesting week 3
+with that rating means the "prediction" already reflects games that hadn't
+happened yet. This inflates apparent accuracy, unevenly across weeks — early
+weeks are the most biased, since SP+ still had the whole season left to
+converge. There's no clean fix: CFBD doesn't expose historical/weekly SP+
+snapshots. Treat these numbers as a rough calibration check, not a claim
+about how the model would have performed live. summarize_by_week() below
+surfaces the week-to-week swings so the bias is visible rather than hidden.
 
 Usage:
     BEARER_TOKEN=... python backtest.py [year] [week] [season_type]
@@ -102,6 +113,58 @@ def summarize_by_tier(graded: pd.DataFrame) -> pd.DataFrame:
     )
     summary["actual_win_rate"] = summary["wins"] / summary["n"]
     return summary.reset_index()
+
+
+def overall_accuracy(graded: pd.DataFrame) -> dict:
+    """Overall win/loss/push counts and win rate across all decided (non-NO-EDGE) picks."""
+    decided = graded[graded["outcome"].isin(["win", "loss"])]
+    wins = int((decided["outcome"] == "win").sum())
+    losses = int((decided["outcome"] == "loss").sum())
+    pushes = int((graded["outcome"] == "push").sum())
+    n = wins + losses
+    return {"n": n, "wins": wins, "losses": losses, "pushes": pushes, "win_rate": wins / n if n else None}
+
+
+def summarize_by_week(graded: pd.DataFrame) -> pd.DataFrame:
+    """
+    Win rate per week. Useful for spotting the look-ahead bias described in this
+    module's docstring: a real predictive edge shouldn't swing wildly week to week.
+    """
+    decided = graded[graded["outcome"].isin(["win", "loss"])]
+    if decided.empty:
+        return pd.DataFrame(columns=["week", "n", "win_rate"])
+
+    summary = decided.groupby("week").agg(
+        n=("outcome", "size"),
+        wins=("outcome", lambda s: (s == "win").sum()),
+    )
+    summary["win_rate"] = summary["wins"] / summary["n"]
+    return summary.reset_index()
+
+
+def backtest_season(bearer_token: str, year: int, weeks, season_type: str = "regular",
+                     home_field: float = model.DEFAULT_HOME_FIELD) -> pd.DataFrame:
+    """
+    Run backtest_week across multiple weeks and concatenate, tagging each row with its
+    week. Weeks with no completed games yet (future weeks) or a fetch error simply
+    contribute no rows rather than raising, so callers can pass e.g. range(1, 16) for a
+    full season without checking which weeks have actually been played.
+    """
+    frames = []
+    for wk in weeks:
+        try:
+            graded = backtest_week(bearer_token, year, wk, season_type, home_field)
+        except Exception:
+            continue
+        if graded.empty:
+            continue
+        graded = graded.copy()
+        graded["week"] = wk
+        frames.append(graded)
+
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
 
 
 if __name__ == "__main__":

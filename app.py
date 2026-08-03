@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 import pandas as pd
 
+import backtest
 import model
 
 EASTERN = ZoneInfo("America/New_York")
@@ -233,15 +234,23 @@ def get_team_logos(yr):
     return model.get_team_logos(bearer_token, yr)
 
 
+@st.cache_data(show_spinner=False, ttl=3600)
+def get_scoring_stats(yr):
+    # "both" so the totals model reflects every game played this season (regular +
+    # postseason so far), regardless of which slate the sidebar is currently showing.
+    return model.get_team_scoring_stats(bearer_token, yr, "both")
+
+
 # ── Fetch ─────────────────────────────────────────────────────────────────────
 with st.spinner("Fetching ratings, lines, and logos…"):
     try:
-        ratings   = get_sp_ratings(year)
-        games     = get_weekly_lines(year, api_week, season_type)
-        game_info = get_game_info(year, api_week, season_type)
-        df        = model.build_picks(ratings, games, model.DEFAULT_PROVIDER, home_field, model.SPREAD_STD_DEV,
-                                       game_info=game_info)
-        logos     = get_team_logos(year)
+        ratings       = get_sp_ratings(year)
+        games         = get_weekly_lines(year, api_week, season_type)
+        game_info     = get_game_info(year, api_week, season_type)
+        scoring_stats = get_scoring_stats(year)
+        df            = model.build_picks(ratings, games, model.DEFAULT_PROVIDER, home_field, model.SPREAD_STD_DEV,
+                                           game_info=game_info, scoring_stats=scoring_stats)
+        logos         = get_team_logos(year)
     except Exception as e:
         st.error(f"API error: {e}")
         st.stop()
@@ -296,10 +305,13 @@ def logo_img(team, size=32):
 # ══════════════════════════════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════════════════════════════
-tab1, tab2, tab3 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "🏆  CBS Pick'em Top 12",
     "🎰  Team Parlays",
+    "💰  Moneylines & O/U",
     "🥇  Championship Favorites",
+    "📊  Model Accuracy",
+    "📈  Stats",
 ])
 
 
@@ -394,11 +406,54 @@ with tab1:
 
 
 # ── TAB 2: Parlays ────────────────────────────────────────────────────────────
+def build_parlay_leg_pool(df_inner: pd.DataFrame) -> pd.DataFrame:
+    """
+    Unify Tier A/B ATS picks and high-value moneyline picks into one candidate-leg
+    pool, so parlays can mix bet types. Each leg keeps its originating (home, away)
+    game so combos can be filtered to one leg per game (see render_parlay_tab).
+    """
+    # leg_odds carries each leg's real American odds so parlay payout is computed from
+    # actual odds per leg instead of assuming every leg is standard -110 juice — a heavy
+    # moneyline favorite pays far less than -110 would imply (see model.american_to_decimal_odds).
+    leg_cols = ["home_team", "away_team", "leg_type", "leg_team", "leg_prob", "leg_label", "leg_detail", "leg_odds"]
+
+    ats_legs = df_inner[df_inner["tier"].isin(["A", "B"]) & (df_inner["pick_team"] != "")].copy()
+    ats_legs["leg_type"] = "ATS"
+    ats_legs["leg_team"] = ats_legs["pick_team"]
+    ats_legs["leg_prob"] = ats_legs["cover_prob"]
+    ats_legs["leg_label"] = ats_legs["leg_team"] + " ATS"
+    ats_legs["leg_detail"] = "Edge: " + ats_legs["edge_points"].map(lambda e: f"{e:+.1f} pts")
+    ats_legs["leg_odds"] = -110  # standard assumed juice for spread/total bets
+
+    pools = [ats_legs[leg_cols]]
+
+    if "ml_pick_team" in df_inner.columns:
+        ml_legs = df_inner[
+            df_inner["ml_pick_team"].notna() & (df_inner["ml_pick_team"] != "")
+            & (df_inner["ml_edge"] >= model.ML_EDGE_THRESHOLD)
+        ].copy()
+        if not ml_legs.empty:
+            ml_legs["leg_type"] = "ML"
+            ml_legs["leg_team"] = ml_legs["ml_pick_team"]
+            ml_legs["leg_prob"] = ml_legs["ml_model_prob"]
+            ml_legs["leg_label"] = ml_legs["leg_team"] + " ML"
+            ml_legs["leg_detail"] = "Edge: " + ml_legs["ml_edge"].map(lambda e: f"{e:.1%}")
+            ml_legs["leg_odds"] = ml_legs.apply(
+                lambda r: r["home_moneyline"] if r["leg_team"] == r["home_team"] else r["away_moneyline"], axis=1
+            )
+            pools.append(ml_legs[leg_cols])
+
+    return pd.concat(pools, ignore_index=True)
+
+
 @st.fragment
 def render_parlay_tab(df_inner):
     st.markdown("## 🎰 Team Parlays")
-    st.caption("Built from Tier A & B picks · Combined prob = product of cover probs · Est. payout assumes −110 per leg")
-    st.caption("⚠️ Combined probability assumes each leg's outcome is statistically independent — "
+    st.caption("Built from Tier A/B ATS picks and high-value moneylines "
+               f"(edge ≥ {model.ML_EDGE_THRESHOLD:.0%}) · Combined prob = product of leg probabilities "
+               "· Payout uses each leg's real odds (−110 assumed for ATS/O-U, actual moneyline for ML legs)")
+    st.caption("⚠️ Each combo uses at most one leg per game (no stacking an ATS and moneyline pick on "
+               "the same matchup), but legs from *different* games are still assumed independent — "
                "correlated results (e.g. conference-wide trends) aren't modeled.")
 
     def dec_legs():
@@ -426,24 +481,31 @@ def render_parlay_tab(df_inner):
     leg_count = st.session_state["parlay_legs"]
     pool_size = leg_count + 4
 
-    parlay_pool = (
-        df_inner[df_inner["tier"].isin(["A", "B"]) & (df_inner["pick_team"] != "")]
-        .sort_values("cover_prob", ascending=False)
-        .head(pool_size)
-        .reset_index(drop=True)
-    )
+    leg_pool = build_parlay_leg_pool(df_inner)
+    parlay_pool = leg_pool.sort_values("leg_prob", ascending=False).head(pool_size).reset_index(drop=True)
 
     if len(parlay_pool) < leg_count:
-        st.info(f"Not enough Tier A/B picks for a {leg_count}-leg parlay. Try reducing legs or lowering thresholds.")
+        st.info(f"Not enough Tier A/B ATS or high-value moneyline picks for a {leg_count}-leg parlay. "
+                f"Try reducing legs.")
         return
 
-    combos = list(itertools.combinations(parlay_pool.index, leg_count))
+    # One leg per game: exclude combos where two legs share the same (home, away) matchup.
+    combos = [
+        c for c in itertools.combinations(parlay_pool.index, leg_count)
+        if parlay_pool.loc[list(c), ["home_team", "away_team"]].drop_duplicates().shape[0] == leg_count
+    ]
+
+    if not combos:
+        st.info(f"No valid {leg_count}-leg combos — the top picks are too concentrated in the same games. "
+                f"Try reducing legs.")
+        return
+
     parlay_rows = sorted(
-        [{"joint_prob": round(parlay_pool.loc[list(c), "cover_prob"].prod(), 4),
+        [{"joint_prob": round(parlay_pool.loc[list(c), "leg_prob"].prod(), 4),
+          "payout": round(parlay_pool.loc[list(c), "leg_odds"].map(model.american_to_decimal_odds).prod(), 2),
           "legs": parlay_pool.loc[list(c)]} for c in combos],
         key=lambda x: x["joint_prob"], reverse=True,
     )
-    payout = round(((100 / 110) + 1) ** leg_count, 2)
 
     all_html = ""
     for i, p in enumerate(parlay_rows[:5]):
@@ -451,11 +513,10 @@ def render_parlay_tab(df_inner):
         for _, leg in p["legs"].iterrows():
             legs_html += (
                 f'<div class="parlay-leg">'
-                f'{logo_img(leg["pick_team"], 20)}&nbsp;<b>{leg["pick_team"]}</b> ATS'
+                f'{logo_img(leg["leg_team"], 20)}&nbsp;<b>{leg["leg_label"]}</b>'
                 f'&nbsp;<span style="opacity:0.5">({leg["away_team"]} @ {leg["home_team"]})</span>'
-                f'&nbsp;&middot;&nbsp;Cover Prob: <b style="color:#facc15">{leg["cover_prob"]:.1%}</b>'
-                f'&nbsp;&middot;&nbsp;Edge: <b>{leg["edge_points"]:+.1f} pts</b>'
-                f'&nbsp;&middot;&nbsp;Tier {leg["tier"]}'
+                f'&nbsp;&middot;&nbsp;Prob: <b style="color:#facc15">{leg["leg_prob"]:.1%}</b>'
+                f'&nbsp;&middot;&nbsp;{leg["leg_detail"]}'
                 f'</div>'
             )
         all_html += (
@@ -466,7 +527,7 @@ def render_parlay_tab(df_inner):
             f'{legs_html}'
             f'<div class="parlay-prob">'
             f'Combined Probability: {p["joint_prob"]:.1%}'
-            f'&nbsp;&middot;&nbsp;Est. Payout (&minus;110 each): ~{payout}x'
+            f'&nbsp;&middot;&nbsp;Est. Payout: ~{p["payout"]}x'
             f'</div></div>'
         )
     st.markdown(all_html, unsafe_allow_html=True)
@@ -476,8 +537,75 @@ with tab2:
     render_parlay_tab(df)
 
 
-# ── TAB 3: Championship Favorites ─────────────────────────────────────────────
+# ── TAB 3: Moneylines & O/U ────────────────────────────────────────────────────
 with tab3:
+    st.markdown("## 💰 Moneylines & Over/Under")
+    st.caption("Moneyline edge = model win probability vs. the market's vig-removed implied probability.")
+    st.info(
+        "ℹ️ **Over/Under is informational only — no model pick.** The rest of this app predicts "
+        "*margin* (SP+ vs. market spread); total points is a different, noisier thing to predict "
+        "and needs its own signal. The 'Predicted Total' column below comes from a simple blended "
+        "estimate (each team's own scoring average blended with their opponent's average points "
+        "allowed) — treat it as a rough guide, not a calibrated model like the spread picks.",
+        icon="ℹ️",
+    )
+
+    ml_df = df[df["ml_pick_team"].notna()].copy() if "ml_pick_team" in df.columns else pd.DataFrame()
+    total_df = df[df["total_pick"].notna()].copy() if "total_pick" in df.columns else pd.DataFrame()
+
+    st.markdown("#### Moneylines")
+    if ml_df.empty:
+        st.info("No moneylines available for this slate's lines provider.")
+    else:
+        ml_display = (
+            ml_df[["home_team", "away_team", "home_moneyline", "away_moneyline",
+                   "ml_pick_team", "ml_model_prob", "ml_market_prob", "ml_edge"]]
+            .rename(columns={
+                "home_team": "Home", "away_team": "Away",
+                "home_moneyline": "Home ML", "away_moneyline": "Away ML",
+                "ml_pick_team": "Pick", "ml_model_prob": "Model Win Prob",
+                "ml_market_prob": "Market Win Prob", "ml_edge": "Edge",
+            })
+            .sort_values("Edge", ascending=False)
+            .reset_index(drop=True)
+        )
+        st.dataframe(
+            ml_display, use_container_width=True, hide_index=True,
+            column_config={
+                "Model Win Prob": st.column_config.ProgressColumn("Model Win Prob", min_value=0.0, max_value=1.0),
+                "Market Win Prob": st.column_config.ProgressColumn("Market Win Prob", min_value=0.0, max_value=1.0),
+                "Edge": st.column_config.NumberColumn("Edge", format="%.3f"),
+            },
+        )
+        strong_ml = ml_df[ml_df["ml_edge"] >= model.ML_EDGE_THRESHOLD]
+        st.caption(f"{len(strong_ml)} game(s) with edge ≥ {model.ML_EDGE_THRESHOLD:.0%} — these are the ones "
+                   f"eligible for the parlay pool on the Team Parlays tab.")
+
+    st.markdown("#### Over/Under")
+    if total_df.empty:
+        st.info("No over/under lines available, or no scoring data yet to build a predicted total.")
+    else:
+        total_display = (
+            total_df[["home_team", "away_team", "market_total", "predicted_total",
+                      "total_edge", "total_pick", "total_cover_prob"]]
+            .rename(columns={
+                "home_team": "Home", "away_team": "Away", "market_total": "Market O/U",
+                "predicted_total": "Predicted Total", "total_edge": "Edge (pts)",
+                "total_pick": "Pick", "total_cover_prob": "Cover Prob",
+            })
+            .sort_values("Edge (pts)", key=lambda s: s.abs(), ascending=False)
+            .reset_index(drop=True)
+        )
+        st.dataframe(
+            total_display, use_container_width=True, hide_index=True,
+            column_config={
+                "Cover Prob": st.column_config.ProgressColumn("Cover Prob", min_value=0.0, max_value=1.0),
+            },
+        )
+
+
+# ── TAB 4: Championship Favorites ─────────────────────────────────────────────
+with tab4:
     st.markdown("## 🥇 National Championship Favorites")
     st.caption(f"Based on SP+ ratings · {year} season · Higher rating = stronger team")
 
@@ -516,3 +644,107 @@ with tab3:
             )
         cards_html += "</div>"
         st.markdown(cards_html, unsafe_allow_html=True)
+
+
+# ── TAB 5: Model Accuracy ─────────────────────────────────────────────────────
+@st.cache_data(show_spinner=False, ttl=21600)
+def get_season_backtest(yr):
+    return backtest.backtest_season(bearer_token, yr, range(1, 16), "regular")
+
+
+with tab5:
+    st.markdown("## 📊 Model Accuracy")
+    st.caption(f"SP+ vs. market ATS picks graded against actual final scores · {year} regular season")
+
+    st.warning(
+        "⚠️ **Look-ahead bias.** CFBD's SP+ ratings are one value per team per *year* — "
+        "the fully-converged, end-of-season rating — not what was knowable the week a game "
+        "was actually played. Early-season weeks especially are graded using ratings that "
+        "already reflect games that hadn't happened yet, which inflates these numbers. "
+        "There's no clean fix (CFBD doesn't expose historical weekly SP+ snapshots), so treat "
+        "this as a rough calibration check, not a claim about live performance. The week-by-week "
+        "chart below makes the bias visible: a real edge shouldn't swing this much week to week.",
+        icon="⚠️",
+    )
+
+    with st.spinner("Backtesting every completed week of the season…"):
+        graded = get_season_backtest(year)
+
+    if graded.empty:
+        st.info("No completed games with results yet for this season.")
+    else:
+        acc = backtest.overall_accuracy(graded)
+        a1, a2, a3, a4 = st.columns(4)
+        a1.metric("Graded Picks", acc["n"])
+        a2.metric("Win Rate", f"{acc['win_rate']:.1%}" if acc["win_rate"] is not None else "—")
+        a3.metric("Wins / Losses", f"{acc['wins']} / {acc['losses']}")
+        a4.metric("Pushes", acc["pushes"])
+
+        st.markdown("#### Calibration by tier")
+        st.caption("Predicted cover probability vs. actual win rate — a well-calibrated tier has these close together.")
+        tier_summary = backtest.summarize_by_tier(graded)
+        st.dataframe(
+            tier_summary.rename(columns={
+                "tier": "Tier", "n": "N", "wins": "Wins",
+                "avg_predicted_cover_prob": "Predicted Cover Prob", "actual_win_rate": "Actual Win Rate",
+            }),
+            use_container_width=True, hide_index=True,
+            column_config={
+                "Predicted Cover Prob": st.column_config.ProgressColumn("Predicted Cover Prob", min_value=0.0, max_value=1.0),
+                "Actual Win Rate": st.column_config.ProgressColumn("Actual Win Rate", min_value=0.0, max_value=1.0),
+            },
+        )
+
+        st.markdown("#### Win rate by week")
+        week_summary = backtest.summarize_by_week(graded).set_index("week")
+        st.bar_chart(week_summary["win_rate"], height=220, use_container_width=True)
+
+
+# ── TAB 6: Stats ───────────────────────────────────────────────────────────────
+@st.cache_data(show_spinner=False, ttl=3600)
+def get_player_season_stats(yr, category):
+    return model.get_player_season_stats(bearer_token, yr, category, "regular")
+
+
+with tab6:
+    st.markdown("## 📈 Stats")
+    st.caption(f"{year} regular season · Offensive stat leaderboard")
+
+    st.info(
+        "ℹ️ **Not real Heisman odds.** CFBD has no awards-odds market — no book prices a "
+        "Heisman futures line through this API, so there's nothing legitimate to display as "
+        "'odds.' What's below is a simple composite of real season stats instead: total yards "
+        "+ 6 points per touchdown, summed across passing/rushing/receiving. It's a common "
+        "informal 'total production' heuristic for gauging who's in the Heisman conversation, "
+        "not a calibrated prediction.",
+        icon="ℹ️",
+    )
+
+    with st.spinner("Fetching player season stats…"):
+        try:
+            passing_stats = get_player_season_stats(year, "passing")
+            rushing_stats = get_player_season_stats(year, "rushing")
+            receiving_stats = get_player_season_stats(year, "receiving")
+        except Exception as e:
+            st.error(f"API error: {e}")
+            passing_stats, rushing_stats, receiving_stats = [], [], []
+
+    leaderboard = model.build_stat_leaderboard(passing_stats, rushing_stats, receiving_stats, top_n=10)
+
+    if leaderboard.empty:
+        st.info("No player stats available yet for this season.")
+    else:
+        st.markdown("#### 🏈 Heisman Watch — Top 10 by Total Production")
+        display = leaderboard[["player", "team", "position", "total_yards", "total_td", "score"]].rename(columns={
+            "player": "Player", "team": "Team", "position": "Pos",
+            "total_yards": "Total Yards", "total_td": "Total TDs", "score": "Score",
+        })
+        st.dataframe(
+            display, use_container_width=True, hide_index=True,
+            column_config={
+                "Total Yards": st.column_config.NumberColumn("Total Yards", format="%.0f"),
+                "Total TDs": st.column_config.NumberColumn("Total TDs", format="%.0f"),
+                "Score": st.column_config.NumberColumn("Score", format="%.0f",
+                                                        help="Total yards + 6 × total TDs"),
+            },
+        )

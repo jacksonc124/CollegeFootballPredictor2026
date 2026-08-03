@@ -151,3 +151,189 @@ def test_strong_picks_filters_on_edge_cover_and_tier():
 
 def test_strong_picks_handles_empty_dataframe():
     assert model.strong_picks(pd.DataFrame()).empty
+
+
+# ---------- Totals (over/under) ----------
+
+def test_predict_total_blends_own_scoring_and_opponent_allowed():
+    home_scoring = {"avg_points_scored": 30, "avg_points_allowed": 20, "games_played": 5}
+    away_scoring = {"avg_points_scored": 24, "avg_points_allowed": 28, "games_played": 5}
+    # home_pred = (30 + 28) / 2 = 29; away_pred = (24 + 20) / 2 = 22; total = 51
+    assert model.predict_total(home_scoring, away_scoring) == 51.0
+
+
+def test_predict_total_none_when_a_team_has_no_games_played():
+    home_scoring = {"avg_points_scored": 30, "avg_points_allowed": 20, "games_played": 0}
+    away_scoring = {"avg_points_scored": 24, "avg_points_allowed": 28, "games_played": 5}
+    assert model.predict_total(home_scoring, away_scoring) is None
+    assert model.predict_total(None, away_scoring) is None
+
+
+def test_score_total_picks_over_when_predicted_above_market():
+    result = model.score_total(predicted_total=51.0, market_total=45.0)
+    assert result["total_pick"] == "OVER"
+    assert result["total_edge"] == 6.0
+    assert result["total_cover_prob"] > 0.5
+
+
+def test_score_total_picks_under_when_predicted_below_market():
+    result = model.score_total(predicted_total=45.0, market_total=51.0)
+    assert result["total_pick"] == "UNDER"
+    assert result["total_edge"] == -6.0
+    assert result["total_cover_prob"] > 0.5
+
+
+def test_score_total_no_edge_when_predicted_equals_market():
+    result = model.score_total(predicted_total=48.0, market_total=48.0)
+    assert result["total_pick"] == "NO EDGE"
+    assert result["total_cover_prob"] == 0.5
+
+
+# ---------- Moneylines ----------
+
+def test_moneyline_to_implied_prob_favorite_and_underdog():
+    assert math.isclose(model.moneyline_to_implied_prob(-150), 0.6)
+    assert math.isclose(model.moneyline_to_implied_prob(150), 0.4)
+
+
+def test_american_to_decimal_odds_matches_known_values():
+    assert math.isclose(model.american_to_decimal_odds(150), 2.5)
+    assert math.isclose(model.american_to_decimal_odds(-110), 1.9091, abs_tol=1e-4)
+    assert math.isclose(model.american_to_decimal_odds(-700), 1.1429, abs_tol=1e-4)
+
+
+def test_american_to_decimal_odds_heavy_favorite_pays_far_less_than_minus_110():
+    # A -700 favorite should pay much less per dollar than the standard -110 juice.
+    assert model.american_to_decimal_odds(-700) < model.american_to_decimal_odds(-110)
+
+
+def test_devig_moneylines_sums_to_one_and_preserves_favorite():
+    home_p, away_p = model.devig_moneylines(-150, 130)
+    assert math.isclose(home_p + away_p, 1.0, abs_tol=1e-9)
+    assert home_p > away_p  # home is still the favorite after removing vig
+
+
+def test_score_moneyline_returns_none_without_both_odds():
+    assert model.score_moneyline("Home U", "Away U", 10.0, 5.0, None, 130) is None
+    assert model.score_moneyline("Home U", "Away U", 10.0, 5.0, -150, None) is None
+
+
+def test_score_moneyline_no_edge_when_model_matches_devigged_market():
+    # Equal ratings/no home field -> model_home_win_prob = 0.5; symmetric odds devig to 0.5/0.5 too.
+    result = model.score_moneyline("Home U", "Away U", 10.0, 10.0, -110, -110, home_field=0.0)
+    assert result["ml_pick_team"] == ""
+    assert math.isclose(result["ml_model_prob"], 0.5)
+    assert math.isclose(result["ml_market_prob"], 0.5)
+    assert result["ml_edge"] == 0.0
+
+
+def test_score_moneyline_favors_home_when_model_more_confident_than_market():
+    # Model strongly favors home (20 vs 10 rating), market barely favors home (-110/-110).
+    result = model.score_moneyline("Home U", "Away U", 20.0, 10.0, -110, -110, home_field=2.5)
+    assert result["ml_pick_team"] == "Home U"
+    assert result["ml_model_prob"] > result["ml_market_prob"]
+    assert result["ml_edge"] > 0
+
+
+# ---------- build_picks integration: totals + moneylines ----------
+
+def test_build_picks_adds_totals_and_moneyline_columns():
+    ratings = {"Home U": 10.0, "Away U": 10.0}
+    games = [{
+        "home_team": "Home U", "away_team": "Away U",
+        "lines": [{"provider": "consensus", "spread": 0.0, "over_under": 45.0,
+                   "home_moneyline": -150, "away_moneyline": 130}],
+    }]
+    scoring_stats = {
+        "Home U": {"avg_points_scored": 30, "avg_points_allowed": 20, "games_played": 5},
+        "Away U": {"avg_points_scored": 24, "avg_points_allowed": 28, "games_played": 5},
+    }
+
+    df = model.build_picks(ratings, games, scoring_stats=scoring_stats)
+    row = df.iloc[0]
+
+    assert row["market_total"] == 45.0
+    assert row["predicted_total"] == 51.0
+    assert row["total_pick"] == "OVER"
+
+    assert row["home_moneyline"] == -150
+    assert row["away_moneyline"] == 130
+    assert row["ml_pick_team"] in ("Home U", "Away U")
+
+
+def test_build_picks_skips_totals_when_scoring_stats_missing_a_team():
+    ratings = {"Home U": 10.0, "Away U": 10.0}
+    games = [{
+        "home_team": "Home U", "away_team": "Away U",
+        "lines": [{"provider": "consensus", "spread": 0.0, "over_under": 45.0}],
+    }]
+    scoring_stats = {"Home U": {"avg_points_scored": 30, "avg_points_allowed": 20, "games_played": 5}}
+
+    df = model.build_picks(ratings, games, scoring_stats=scoring_stats)
+    assert "total_pick" not in df.columns or pd.isna(df.iloc[0]["total_pick"])
+
+
+def test_build_picks_no_moneyline_columns_when_line_lacks_them():
+    ratings = {"Home U": 10.0, "Away U": 5.0}
+    games = [{
+        "home_team": "Home U", "away_team": "Away U",
+        "lines": [{"provider": "consensus", "spread": -3.0}],
+    }]
+    df = model.build_picks(ratings, games)
+    assert "ml_pick_team" not in df.columns
+
+
+# ---------- Stat leaderboard ----------
+
+def test_build_stat_leaderboard_combines_categories_and_scores():
+    passing = [
+        {"player": "QB1", "team": "A", "position": "QB", "stat_type": "YDS", "stat": "3000"},
+        {"player": "QB1", "team": "A", "position": "QB", "stat_type": "TD", "stat": "30"},
+        {"player": "QB1", "team": "A", "position": "QB", "stat_type": "INT", "stat": "8"},  # ignored stat_type
+    ]
+    rushing = [
+        {"player": "QB1", "team": "A", "position": "QB", "stat_type": "YDS", "stat": "500"},
+        {"player": "QB1", "team": "A", "position": "QB", "stat_type": "TD", "stat": "5"},
+        {"player": "RB1", "team": "B", "position": "RB", "stat_type": "YDS", "stat": "1500"},
+        {"player": "RB1", "team": "B", "position": "RB", "stat_type": "TD", "stat": "18"},
+        {"player": "RB1", "team": "B", "position": "RB", "stat_type": "CAR", "stat": "250"},  # ignored stat_type
+    ]
+    receiving = [
+        {"player": "RB1", "team": "B", "position": "RB", "stat_type": "YDS", "stat": "200"},
+        {"player": "RB1", "team": "B", "position": "RB", "stat_type": "TD", "stat": "2"},
+    ]
+
+    board = model.build_stat_leaderboard(passing, rushing, receiving, top_n=10)
+
+    qb1 = board[board["player"] == "QB1"].iloc[0]
+    assert qb1["total_yards"] == 3500
+    assert qb1["total_td"] == 35
+    assert qb1["score"] == 3500 + 6 * 35
+
+    rb1 = board[board["player"] == "RB1"].iloc[0]
+    assert rb1["total_yards"] == 1700
+    assert rb1["total_td"] == 20
+    assert rb1["score"] == 1700 + 6 * 20
+
+    # QB1's score is higher, so it should rank first.
+    assert board.iloc[0]["player"] == "QB1"
+
+
+def test_build_stat_leaderboard_respects_top_n():
+    passing = [
+        {"player": f"QB{i}", "team": "A", "position": "QB", "stat_type": "YDS", "stat": str(1000 + i)}
+        for i in range(5)
+    ]
+    board = model.build_stat_leaderboard(passing, [], [], top_n=2)
+    assert len(board) == 2
+    assert board.iloc[0]["player"] == "QB4"  # highest yardage
+
+
+def test_build_stat_leaderboard_empty_inputs_returns_empty_dataframe():
+    assert model.build_stat_leaderboard([], [], []).empty
+
+
+def test_build_stat_leaderboard_ignores_unparseable_stat_values():
+    passing = [{"player": "QB1", "team": "A", "position": "QB", "stat_type": "YDS", "stat": "N/A"}]
+    board = model.build_stat_leaderboard(passing, [], [])
+    assert board.empty
