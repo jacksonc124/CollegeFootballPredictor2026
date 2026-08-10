@@ -313,6 +313,19 @@ df = df.drop(columns=["start_time_tbd"])
 
 strong = model.strong_picks(df)
 
+# ── Auto-log the current week's picks ───────────────────────────────────────────
+# Only the slate get_current_cfb_week() actually identifies as "now" — not whatever
+# year/week the sidebar happens to be showing, since a user browsing a past week
+# shouldn't silently log it (that would defeat the "recorded before kickoff" premise
+# pick_log.py exists for). Postseason isn't auto-detected as "current" (get_current_cfb_week
+# only reasons about regular-season dates), so postseason picks still need the manual button.
+is_current_slate = (not postseason) and year == default_year and week == default_week
+if is_current_slate:
+    auto_log_key = f"auto_logged_{year}_{week}_{season_type}"
+    if auto_log_key not in st.session_state:
+        pick_log.log_picks(df, year, api_week, season_type)  # no-op if already logged
+        st.session_state[auto_log_key] = True
+
 # ── Summary metrics ───────────────────────────────────────────────────────────
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Total Games",    len(df))
@@ -372,11 +385,15 @@ with tab1:
     log_col, btn_col = st.columns([4, 1])
     with log_col:
         if pick_log.already_logged(year, api_week, season_type):
-            st.caption("✅ This slate's picks are already logged for unbiased accuracy tracking — "
+            reason = "auto-logged (this is the current week)" if is_current_slate else "logged"
+            st.caption(f"✅ This slate's picks are {reason} for unbiased accuracy tracking — "
                        "see the Model Accuracy tab.")
+        elif is_current_slate:
+            st.caption("📌 Auto-logging this slate now (current week) for a genuinely unbiased "
+                       "accuracy record — see the Model Accuracy tab.")
         else:
-            st.caption("📌 Log this slate's picks now, before games are played, for a genuinely "
-                       "unbiased accuracy record (no look-ahead bias) — see the Model Accuracy tab.")
+            st.caption("📌 This isn't the current week, so it won't auto-log — use the button to log it "
+                       "manually if you want it tracked anyway. See the Model Accuracy tab.")
     with btn_col:
         if not pick_log.already_logged(year, api_week, season_type):
             if st.button("📌 Log Picks", key="log_picks_btn", use_container_width=True):
