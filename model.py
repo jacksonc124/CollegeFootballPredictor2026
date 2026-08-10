@@ -300,9 +300,10 @@ def get_game_weather(bearer_token: str, year: int, week: int | None, season_type
 def get_adjusted_team_metrics(bearer_token: str, year: int, cache_dir: Path = CACHE_DIR) -> dict:
     """
     Pull CFBD's opponent-adjusted team efficiency (EPA/play, offense and allowed defense)
-    for the season — requires a CFBD tier with adjustedMetrics access. EPA/play values are
-    already centered near zero (they represent value above situational expectation), so 0
-    is a reasonable neutral baseline. Returns
+    for the season — requires a CFBD tier with adjustedMetrics access. These values are NOT
+    zero-centered in practice (empirically ~+0.155 for both, in 2025 data) — see
+    league_average_adjusted_metrics() and adjusted_total_delta() for why callers need the
+    real league average as a baseline, not zero. Returns
     {team: {"offense_epa": float, "defense_epa_allowed": float}}.
     """
     import cfbd
@@ -317,6 +318,43 @@ def get_adjusted_team_metrics(bearer_token: str, year: int, cache_dir: Path = CA
     result = {r.team: {"offense_epa": r.epa.total, "defense_epa_allowed": r.epa_allowed.total} for r in rows}
     cache_file.write_text(json.dumps(result))
     return result
+
+
+def get_team_ats_records(bearer_token: str, year: int, cache_dir: Path = CACHE_DIR) -> dict:
+    """
+    Pull real historical against-the-spread records per team for the season — this is
+    actual bet-grading data (CFBD grades every game against its own closing lines), not a
+    model output. Returns {team: {"games": int, "ats_wins": int, "ats_losses": int,
+    "ats_pushes": int, "avg_cover_margin": float | None}}.
+    """
+    import cfbd
+
+    cache_file = cache_path(f"team_ats_{year}.json", cache_dir=cache_dir)
+    if cache_file.exists():
+        return json.loads(cache_file.read_text())
+
+    with make_client(bearer_token) as client:
+        rows = cfbd.TeamsApi(client).get_teams_ats(year=year)
+
+    result = {
+        r.team: {
+            "games": r.games, "ats_wins": r.ats_wins, "ats_losses": r.ats_losses,
+            "ats_pushes": r.ats_pushes, "avg_cover_margin": r.avg_cover_margin,
+        }
+        for r in rows
+    }
+    cache_file.write_text(json.dumps(result))
+    return result
+
+
+def ats_record_str(team: str, ats_records: dict) -> str:
+    """"W-L" (or "W-L-P" if there's a push) ATS record string for a team, or "" if unknown."""
+    r = ats_records.get(team)
+    if not r:
+        return ""
+    if r["ats_pushes"]:
+        return f"{r['ats_wins']}-{r['ats_losses']}-{r['ats_pushes']}"
+    return f"{r['ats_wins']}-{r['ats_losses']}"
 
 
 # Only these two FBS polls — CFBD also returns FCS/D2/D3 coaches polls (and, late season,

@@ -8,6 +8,10 @@ cfb_cache/
 all_games_*.csv
 strong_picks_*.csv
 
+# pick log — local persistence only (see pick_log.py's module docstring); back it up via
+# the app's Download Log button, don't rely on git for this
+pick_log/
+
 # secrets
 .streamlit/secrets.toml
 .env

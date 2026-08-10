@@ -29,18 +29,25 @@ import pandas as pd
 import model
 
 
-def get_actual_results(bearer_token: str, year: int, week: int, season_type: str = "regular",
+def get_actual_results(bearer_token: str, year: int, week: int | None, season_type: str = "regular",
                         cache_dir=model.CACHE_DIR) -> dict:
-    """Return {(home_team, away_team): (home_points, away_points)} for completed games."""
+    """
+    Return {(home_team, away_team): (home_points, away_points)} for completed games.
+    week=None fetches all games for that season_type (used for postseason).
+    """
     import cfbd
 
-    cache_file = model.cache_path(f"results_{year}_{season_type}_wk{week}.json", cache_dir=cache_dir)
+    wk_str = "all" if week is None else str(week)
+    cache_file = model.cache_path(f"results_{year}_{season_type}_wk{wk_str}.json", cache_dir=cache_dir)
     if cache_file.exists():
         raw = json.loads(cache_file.read_text())
         return {tuple(k.split("||")): tuple(v) for k, v in raw.items()}
 
     with model.make_client(bearer_token) as client:
-        games = cfbd.GamesApi(client).get_games(year=year, week=week, season_type=season_type)
+        kwargs = dict(year=year, season_type=season_type)
+        if week is not None:
+            kwargs["week"] = week
+        games = cfbd.GamesApi(client).get_games(**kwargs)
 
     results = {}
     for g in games:

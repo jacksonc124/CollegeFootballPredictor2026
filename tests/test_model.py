@@ -419,6 +419,24 @@ def test_build_picks_no_moneyline_columns_when_line_lacks_them():
     assert "ml_pick_team" not in df.columns
 
 
+# ---------- Team ATS records ----------
+
+def test_ats_record_str_formats_win_loss():
+    ats_records = {"Ohio State": {"games": 13, "ats_wins": 9, "ats_losses": 4, "ats_pushes": 0,
+                                   "avg_cover_margin": 4.1}}
+    assert model.ats_record_str("Ohio State", ats_records) == "9-4"
+
+
+def test_ats_record_str_includes_pushes_when_present():
+    ats_records = {"Ohio State": {"games": 13, "ats_wins": 8, "ats_losses": 4, "ats_pushes": 1,
+                                   "avg_cover_margin": 2.0}}
+    assert model.ats_record_str("Ohio State", ats_records) == "8-4-1"
+
+
+def test_ats_record_str_empty_when_team_unknown():
+    assert model.ats_record_str("Vanderbilt", {}) == ""
+
+
 # ---------- Rankings ----------
 
 def test_rank_badge_prefers_ap_over_coaches():

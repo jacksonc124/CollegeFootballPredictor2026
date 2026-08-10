@@ -8,6 +8,7 @@ import pandas as pd
 
 import backtest
 import model
+import pick_log
 
 EASTERN = ZoneInfo("America/New_York")
 
@@ -279,6 +280,11 @@ def get_adjusted_metrics(yr):
         return {}
 
 
+@st.cache_data(show_spinner=False, ttl=21600)
+def get_ats_records(yr):
+    return model.get_team_ats_records(bearer_token, yr)
+
+
 # ── Fetch ─────────────────────────────────────────────────────────────────────
 with st.spinner("Fetching ratings, lines, and logos…"):
     try:
@@ -289,6 +295,7 @@ with st.spinner("Fetching ratings, lines, and logos…"):
         rankings         = get_rankings(year, api_week, season_type)
         game_weather     = get_game_weather(year, api_week, season_type)
         adjusted_metrics = get_adjusted_metrics(year)
+        ats_records      = get_ats_records(year)
         df               = model.build_picks(ratings, games, model.DEFAULT_PROVIDER, home_field, model.SPREAD_STD_DEV,
                                               game_info=game_info, scoring_stats=scoring_stats,
                                               adjusted_metrics=adjusted_metrics, game_weather=game_weather)
@@ -362,6 +369,21 @@ with tab1:
     st.markdown("## 🏆 CBS Pick'em — Top 12 ATS Picks")
     st.caption("Ranked by cover probability · Against the spread")
 
+    log_col, btn_col = st.columns([4, 1])
+    with log_col:
+        if pick_log.already_logged(year, api_week, season_type):
+            st.caption("✅ This slate's picks are already logged for unbiased accuracy tracking — "
+                       "see the Model Accuracy tab.")
+        else:
+            st.caption("📌 Log this slate's picks now, before games are played, for a genuinely "
+                       "unbiased accuracy record (no look-ahead bias) — see the Model Accuracy tab.")
+    with btn_col:
+        if not pick_log.already_logged(year, api_week, season_type):
+            if st.button("📌 Log Picks", key="log_picks_btn", use_container_width=True):
+                pick_log.log_picks(df, year, api_week, season_type)
+                st.rerun()
+    st.markdown("---")
+
     top12 = (df[df["tier"] != "Pass"]
              .sort_values("cover_prob", ascending=False)
              .head(12).reset_index(drop=True))
@@ -420,6 +442,9 @@ with tab1:
         filtered.drop(columns=["pick_team"]).rename(columns=DISPLAY_COLUMNS)
                 .sort_values("Edge (pts)", key=lambda s: s.abs(), ascending=False).reset_index(drop=True)
     )
+    # ATS lookups use the clean team name, so compute them before the rank-badge prefix is added.
+    table_df["Home ATS"] = table_df["Home"].map(lambda t: model.ats_record_str(t, ats_records))
+    table_df["Away ATS"] = table_df["Away"].map(lambda t: model.ats_record_str(t, ats_records))
     table_df["Home"] = table_df["Home"].map(lambda t: f"{model.rank_badge(t, rankings)}{t}")
     table_df["Away"] = table_df["Away"].map(lambda t: f"{model.rank_badge(t, rankings)}{t}")
     st.dataframe(
@@ -775,6 +800,35 @@ with tab4:
             )
             st.dataframe(poll_df, use_container_width=True, hide_index=True, height=min(50 + 35 * len(poll_df), 600))
 
+    st.markdown("---")
+    st.markdown("### 📈 Best & Worst Against the Spread")
+    st.caption(f"{year} real ATS record (CFBD-graded, not a model output) · "
+               "ranked by average cover margin, the size of the beat/miss vs. the closing line, not just win/loss.")
+
+    if not ats_records:
+        st.info("No ATS records available for this year yet.")
+    else:
+        # get_teams_ats has no classification filter either (same situation as player
+        # season stats) — filter to FBS using the team names already fetched for logos.
+        fbs_ats_teams = set(logos.keys()) or set(ats_records.keys())
+        ats_df = (
+            pd.DataFrame([
+                {"Team": team, "Record": model.ats_record_str(team, ats_records),
+                 "Games": r["games"], "Avg Cover Margin": r["avg_cover_margin"]}
+                for team, r in ats_records.items()
+                if r["avg_cover_margin"] is not None and team in fbs_ats_teams
+            ])
+            .sort_values("Avg Cover Margin", ascending=False)
+            .reset_index(drop=True)
+        )
+        ats_cols = st.columns(2)
+        with ats_cols[0]:
+            st.markdown("**Best ATS**")
+            st.dataframe(ats_df.head(10), use_container_width=True, hide_index=True)
+        with ats_cols[1]:
+            st.markdown("**Worst ATS**")
+            st.dataframe(ats_df.tail(10).sort_values("Avg Cover Margin"), use_container_width=True, hide_index=True)
+
 
 # ── TAB 5: Model Accuracy ─────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False, ttl=21600)
@@ -840,6 +894,47 @@ with tab5:
             st.markdown("#### Win rate by week")
             week_summary = backtest.summarize_by_week(graded).set_index("week")
             st.bar_chart(week_summary["win_rate"], height=220, use_container_width=True)
+
+    st.markdown("---")
+    st.markdown("## ✅ Verified Accuracy (Logged Picks)")
+    st.caption("Only picks explicitly logged *before* their games were played — unlike the season "
+               "backtest above, this has no look-ahead bias. It's the real record, but it only "
+               "covers whatever's been logged via the 📌 Log Picks button on the Pick'em tab.")
+
+    logged_df = pick_log.load_log()
+    if logged_df.empty:
+        st.info("No picks logged yet. Use the 📌 Log Picks button on the Pick'em tab each week "
+                "to start building a real track record.")
+    else:
+        with st.spinner("Grading logged picks against final scores…"):
+            graded_log = pick_log.grade_logged_picks(bearer_token)
+        log_acc = backtest.overall_accuracy(graded_log)
+        if log_acc["n"] == 0:
+            st.info(f"{len(logged_df)} pick(s) logged, but none have final scores yet.")
+        else:
+            lg1, lg2, lg3 = st.columns(3)
+            lg1.metric("Logged Picks Graded", log_acc["n"])
+            lg2.metric("Win Rate", f"{log_acc['win_rate']:.1%}" if log_acc["win_rate"] is not None else "—")
+            lg3.metric("Wins / Losses", f"{log_acc['wins']} / {log_acc['losses']}")
+
+        st.markdown("#### Logged slates")
+        weeks_df = pd.DataFrame(pick_log.logged_weeks(), columns=["Year", "Week", "Season Type"])
+        st.dataframe(weeks_df, use_container_width=True, hide_index=True)
+
+    st.markdown("#### Backup / restore log")
+    st.caption("⚠️ This log lives on the app's local disk and is **not** committed to git — a "
+               "redeploy pulls a fresh container and wipes it. Download periodically to keep a "
+               "permanent record, and restore after a reset.")
+    bk_col1, bk_col2 = st.columns(2)
+    with bk_col1:
+        st.download_button("⬇️ Download Log (CSV)", data=logged_df.to_csv(index=False),
+                           file_name="pick_log.csv", mime="text/csv", disabled=logged_df.empty)
+    with bk_col2:
+        uploaded_log = st.file_uploader("⬆️ Restore Log (CSV)", type="csv", key="restore_log_upload")
+        if uploaded_log is not None:
+            restored_df = pd.read_csv(uploaded_log)
+            pick_log.restore_log(restored_df)
+            st.success("Log restored — reload the page to see it reflected.")
 
 
 # ── TAB 6: Stats ───────────────────────────────────────────────────────────────
