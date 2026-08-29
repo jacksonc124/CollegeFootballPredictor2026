@@ -1,5 +1,0 @@
-[theme]
-# Matches ACCENT in app.py — keeps Streamlit's own colored elements (ProgressColumn bars,
-# slider handles, checked checkboxes/radios) in the same color language as the app's
-# hand-styled components instead of Streamlit's default red.
-primaryColor = "#38bdf8"
