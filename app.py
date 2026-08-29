@@ -147,6 +147,17 @@ st.markdown("""
     .bar-bg { margin-top: 6px; background: rgba(128,128,128,0.15); border-radius: 4px; height: 4px; width: 100%; }
     .bar-fill { border-radius: 4px; height: 4px; }
 
+    /* Slate confidence breakdown — a single proportional bar (segment width = share of
+       games in that tier) reads at a glance; the scatter chart it replaced required
+       parsing two abstract axes to get the same information. */
+    .tier-bar { display: flex; height: 16px; border-radius: 8px; overflow: hidden; margin-top: 6px; }
+    .tier-bar-seg { height: 100%; transition: flex-grow 0.2s; }
+    .tier-bar-legend {
+        font-size: 13px; opacity: 0.8; margin-top: 10px;
+        display: flex; gap: 18px; flex-wrap: wrap;
+    }
+    .tier-bar-legend b { font-family: 'Bebas Neue', sans-serif; letter-spacing: 0.5px; }
+
     /* Light chip behind every team logo so dark/transparent PNG artwork stays visible
        regardless of the app's light/dark theme. The colored ring (set inline per-logo,
        since it's each team's own brand color) adds a subtle bit of team identity without
@@ -226,8 +237,12 @@ with st.sidebar:
     postseason = st.checkbox("📬 Postseason / Bowl Games", value=False,
                              help="Fetches every bowl & CFP game for the selected year, ignoring week. "
                                   "CFBD groups all of them under one 'week', so the week selector doesn't apply here.")
-    week = st.slider("Week", min_value=1, max_value=15, value=default_week, step=1,
-                     disabled=postseason)
+    # A dropdown beats a drag-slider for picking one of 15 discrete values on a touchscreen —
+    # a slider needs a precise drag gesture, a dropdown just needs a tap.
+    week = st.selectbox(
+        "Week", options=list(range(1, 16)), index=default_week - 1,
+        format_func=lambda w: f"Week {w}", disabled=postseason,
+    )
 
     week0_filter = "All"
     if week == 1 and not postseason:
@@ -243,15 +258,17 @@ with st.sidebar:
                              help="Filter to just games kicking off today (in ET, matching the "
                                   "kickoff times shown on each card).")
 
-    st.markdown("### ⚙️ Model")
-    home_field = st.number_input(
-        "Home Field Advantage (pts)",
-        min_value=0.0, max_value=10.0, value=model.DEFAULT_HOME_FIELD, step=0.5,
-        help="Applied only to true home games. Neutral-site games (most bowls, CFP quarterfinals/"
-             "semifinals/championship) automatically get 0 — detected per-game from CFBD, not guessed "
-             "from the postseason toggle. CFP first-round games are true home games for the higher seed, "
-             "so they still get this value.",
-    )
+    # Home Field Advantage is a rarely-touched tuning knob, not a day-to-day nav control —
+    # tucked away so the sidebar's main job (picking a slate) isn't cluttered by it.
+    with st.expander("⚙️ Advanced"):
+        home_field = st.number_input(
+            "Home Field Advantage (pts)",
+            min_value=0.0, max_value=10.0, value=model.DEFAULT_HOME_FIELD, step=0.5,
+            help="Applied only to true home games. Neutral-site games (most bowls, CFP quarterfinals/"
+                 "semifinals/championship) automatically get 0 — detected per-game from CFBD, not guessed "
+                 "from the postseason toggle. CFP first-round games are true home games for the higher seed, "
+                 "so they still get this value.",
+        )
 
     st.markdown("---")
     st.markdown(
@@ -410,7 +427,10 @@ if today_only:
 # independent of the "Today's games only" sidebar checkbox, so that tab always reflects
 # literally today regardless of whether the user has that filter on.
 today_df = df[df["start_date"].apply(lambda d: model.is_game_on_date(d, date.today(), EASTERN))].copy()
-today_df["start_date"] = today_df.apply(lambda r: format_game_date(r["start_date"], r["start_time_tbd"]), axis=1)
+if not today_df.empty:
+    # .apply(axis=1) on an empty DataFrame returns the DataFrame unchanged (not a Series),
+    # which breaks the single-column assignment below — only worth doing with rows present.
+    today_df["start_date"] = today_df.apply(lambda r: format_game_date(r["start_date"], r["start_time_tbd"]), axis=1)
 today_df = today_df.drop(columns=["start_time_tbd"]).reset_index(drop=True)
 
 df["start_date"] = df.apply(lambda r: format_game_date(r["start_date"], r["start_time_tbd"]), axis=1)
@@ -425,14 +445,26 @@ c2.metric("Strong Picks",   len(strong))
 c3.metric("Tier A Picks",   len(df[df["tier"] == "A"]))
 c4.metric("Avg Cover Prob", f"{df['cover_prob'].mean():.3f}")
 
-# ── Week-at-a-glance chart ──────────────────────────────────────────────────────
-chart_df = df[["edge_points", "cover_prob", "tier"]].rename(
-    columns={"edge_points": "Edge (pts)", "cover_prob": "Cover Prob"}
+# ── Slate confidence breakdown ──────────────────────────────────────────────────
+st.markdown("##### 🎯 This Slate's Confidence")
+tier_order = ["A", "B", "C", "Pass"]
+tier_counts = df["tier"].value_counts()
+tier_bar_segs = "".join(
+    f'<div class="tier-bar-seg" style="flex:{tier_counts.get(t, 0)};background:{TIER_COLORS[t]};"></div>'
+    for t in tier_order
 )
-chart_df["Tier Color"] = df["tier"].map(TIER_COLORS)
-st.scatter_chart(chart_df, x="Edge (pts)", y="Cover Prob", color="Tier Color", height=220, use_container_width=True)
-st.caption("Each dot is one game · farther from center = bigger edge (either direction) · "
-           "higher = more confident · color = tier (🟢 A · 🟡 B · 🟠 C · ⚪ Pass)")
+tier_bar_legend = "".join(
+    f'<span><b style="color:{TIER_COLORS[t]}">{tier_counts.get(t, 0)}</b> '
+    f'{"Tier " + t if t != "Pass" else "Pass"}</span>'
+    for t in tier_order
+)
+st.markdown(
+    f'<div class="tier-bar">{tier_bar_segs}</div>'
+    f'<div class="tier-bar-legend">{tier_bar_legend}</div>',
+    unsafe_allow_html=True,
+)
+st.caption("Share of this slate's games in each tier — more green (Tier A) means more strong plays. "
+           "See the Pick'em tab for the ranked list.")
 st.markdown("---")
 
 
