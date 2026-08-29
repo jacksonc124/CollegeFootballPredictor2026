@@ -91,6 +91,9 @@ st.markdown("""
     .pickem-tier-badge.tier-A { background: #22c55e; }
     .pickem-tier-badge.tier-B { background: #facc15; }
     .pickem-tier-badge.tier-C { background: #fb923c; }
+    /* The Pick'em tab never shows Pass-tier cards (filtered out upstream), but the Today
+       tab shows every game including Pass, so this badge needs its own readable style. */
+    .pickem-tier-badge.tier-Pass { background: #6b7280; color: #f3f4f6; }
     .pickem-matchup { font-size: 13px; opacity: 0.65; }
     /* The hero number — this is this app's "score," so it gets the boldest, biggest
        treatment on the card, matching how scores/timers read in a sports app. */
@@ -157,6 +160,33 @@ st.markdown("""
         display: flex; gap: 18px; flex-wrap: wrap;
     }
     .tier-bar-legend b { font-family: 'Bebas Neue', sans-serif; letter-spacing: 0.5px; }
+
+    .today-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+        gap: 14px; margin-top: 12px;
+    }
+    .today-card {
+        background: var(--background-color);
+        border: 1px solid var(--border-color);
+        border-radius: 10px; padding: 14px 16px;
+        display: flex; flex-direction: column; gap: 6px;
+    }
+    .today-card.tier-A { border-left: 4px solid #22c55e; }
+    .today-card.tier-B { border-left: 4px solid #facc15; }
+    .today-card.tier-C { border-left: 4px solid #fb923c; }
+    .today-card-top { display: flex; align-items: baseline; justify-content: space-between; }
+    .today-kickoff { font-size: 12px; opacity: 0.6; }
+    .today-stats {
+        display: grid; grid-template-columns: repeat(2, 1fr);
+        gap: 0 12px; margin-top: 8px; font-size: 12px;
+    }
+    .today-stats > div {
+        display: flex; justify-content: space-between;
+        border-bottom: 1px solid rgba(128,128,128,0.12); padding: 4px 0;
+    }
+    .today-stat-label { opacity: 0.6; }
+    .today-stat-value { font-weight: 600; }
 
     /* Light chip behind every team logo so dark/transparent PNG artwork stays visible
        regardless of the app's light/dark theme. The colored ring (set inline per-logo,
@@ -515,37 +545,60 @@ with tab0:
         st.info("No games today in the slate currently selected in the sidebar. "
                 "Adjust Year/Week there to jump to a different day.")
     else:
-        today_cols = ["start_date", "away_team", "home_team", "market_spread_home",
-                      "pick_team", "cover_prob", "tier"]
-        today_rename = {
-            "start_date": "Kickoff", "away_team": "Away", "home_team": "Home",
-            "market_spread_home": "Spread", "pick_team": "ATS Pick",
-            "cover_prob": "Cover Prob", "tier": "Tier",
-        }
-        if "home_moneyline" in today_df.columns:
-            today_cols += ["home_moneyline", "away_moneyline"]
-            today_rename["home_moneyline"] = "Home ML"
-            today_rename["away_moneyline"] = "Away ML"
-        if "market_total" in today_df.columns:
-            today_cols += ["market_total", "total_pick"]
-            today_rename["market_total"] = "O/U Line"
-            today_rename["total_pick"] = "Total Pick"
+        has_ml = "home_moneyline" in today_df.columns
+        has_total = "market_total" in today_df.columns
 
-        today_display = today_df[today_cols].rename(columns=today_rename)
-        today_display["Away"] = today_display["Away"].map(lambda t: f"{model.rank_badge(t, rankings)}{t}")
-        today_display["Home"] = today_display["Home"].map(lambda t: f"{model.rank_badge(t, rankings)}{t}")
+        today_cards_html = '<div class="today-grid">'
+        for _, row in today_df.iterrows():
+            tier, home, away = row["tier"], row["home_team"], row["away_team"]
+            pick_team, cover  = row["pick_team"], row["cover_prob"]
+            spread            = row["market_spread_home"]
+            tier_color        = TIER_COLORS.get(tier, ACCENT)
 
-        def _shade_today_row(row):
-            return [tier_row_css(row["Tier"])] * len(row)
+            stats_html = (
+                f'<div><span class="today-stat-label">Spread</span>'
+                f'<span class="today-stat-value">{spread:+.1f}</span></div>'
+                if spread is not None else ""
+            )
+            if has_ml and pd.notna(row.get("home_moneyline")):
+                stats_html += (
+                    f'<div><span class="today-stat-label">Home ML</span>'
+                    f'<span class="today-stat-value">{row["home_moneyline"]:+.0f}</span></div>'
+                    f'<div><span class="today-stat-label">Away ML</span>'
+                    f'<span class="today-stat-value">{row["away_moneyline"]:+.0f}</span></div>'
+                )
+            if has_total and pd.notna(row.get("market_total")):
+                stats_html += (
+                    f'<div><span class="today-stat-label">O/U Line</span>'
+                    f'<span class="today-stat-value">{row["market_total"]:.1f}</span></div>'
+                )
+                if pd.notna(row.get("total_pick")) and row["total_pick"]:
+                    stats_html += (
+                        f'<div><span class="today-stat-label">Total Pick</span>'
+                        f'<span class="today-stat-value">{row["total_pick"]}</span></div>'
+                    )
 
-        st.dataframe(
-            today_display.style.apply(_shade_today_row, axis=1),
-            use_container_width=True, hide_index=True,
-            column_config={
-                "Cover Prob": st.column_config.ProgressColumn("Cover Prob", min_value=0.0, max_value=1.0),
-                "Spread": st.column_config.NumberColumn("Spread", format="%+.1f"),
-            },
-        )
+            today_cards_html += (
+                f'<div class="today-card tier-{tier}">'
+                f'<div class="today-card-top">'
+                f'<div class="today-kickoff">🗓 {row["start_date"]}</div>'
+                f'<div class="pickem-tier-badge tier-{tier}">TIER {tier}</div>'
+                f'</div>'
+                f'<div class="pickem-logos">{logo_img(away, 32)}<span class="pickem-vs">@</span>{logo_img(home, 32)}</div>'
+                f'<div class="pickem-matchup">{model.rank_badge(away, rankings)}{away} @ '
+                f'{model.rank_badge(home, rankings)}{home}</div>'
+                f'<div class="pickem-hero">'
+                f'<span class="pickem-cover-prob" style="color:{tier_color};">{cover:.0%}</span>'
+                f'</div>'
+                f'<div class="pickem-confidence-bar">'
+                f'<div class="pickem-confidence-fill" style="width:{cover * 100:.0f}%;background:{tier_color};"></div>'
+                f'</div>'
+                f'<div class="pickem-pick">&#10003; ATS Pick: <b>{model.rank_badge(pick_team, rankings)}{pick_team}</b></div>'
+                f'<div class="today-stats">{stats_html}</div>'
+                f'</div>'
+            )
+        today_cards_html += "</div>"
+        st.markdown(today_cards_html, unsafe_allow_html=True)
         st.caption(f"{len(today_df)} game(s) today · sorted as returned by the lines provider — "
                    "see the Pick'em tab for a ranked top 12.")
 
