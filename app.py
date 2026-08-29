@@ -13,17 +13,6 @@ import pick_log
 EASTERN = ZoneInfo("America/New_York")
 
 
-# ── CFB week helper ───────────────────────────────────────────────────────────
-def get_current_cfb_week() -> tuple:
-    today        = date.today()
-    current_year = today.year
-    season_start = date(current_year, 9, 1)
-    if today < season_start:
-        return current_year - 1, 1
-    week = min((today - season_start).days // 7 + 1, 15)
-    return current_year, week
-
-
 def format_game_date(iso_start_date, start_time_tbd) -> str:
     """Format a UTC ISO start_date (from get_game_info) as an ET date, with time unless TBD."""
     if not iso_start_date:
@@ -171,8 +160,18 @@ except Exception:
     bearer_token = os.environ.get("BEARER_TOKEN", "")
 
 
+@st.cache_data(show_spinner=False, ttl=86400)
+def get_calendar_cached(yr):
+    try:
+        return model.get_calendar(bearer_token, yr)
+    except Exception as e:
+        print(f"Warning: failed to fetch calendar (defaults fall back to last year's week 1): {e}")
+        return []
+
+
 # ── sidebar ───────────────────────────────────────────────────────────────────
-default_year, default_week = get_current_cfb_week()
+_today = date.today()
+default_year, default_week = model.resolve_current_week(get_calendar_cached(_today.year), _today.year, _today)
 
 with st.sidebar:
     st.markdown("# 🏈 CFB MODEL")
@@ -184,6 +183,16 @@ with st.sidebar:
                                   "CFBD groups all of them under one 'week', so the week selector doesn't apply here.")
     week = st.slider("Week", min_value=1, max_value=15, value=default_week, step=1,
                      disabled=postseason)
+
+    week0_filter = "All"
+    if week == 1 and not postseason:
+        week0_filter = st.radio(
+            "Week 1 slate", ["All", "Week 0 only", "Week 1 only"], horizontal=True,
+            help="CFBD lumps the early season-opening games (what fans call 'Week 0') and the "
+                 "Labor Day weekend slate together under one 'week 1' — there's no such split in "
+                 "their data. This filters by actual game date instead (cutoff: the Thursday "
+                 "before Labor Day).",
+        )
 
     st.markdown("### ⚙️ Model")
     home_field = st.number_input(
@@ -211,6 +220,8 @@ api_week    = None if postseason else week
 
 # ── header ────────────────────────────────────────────────────────────────────
 season_label = "POSTSEASON" if postseason else f"WK {week}"
+if week0_filter != "All":
+    season_label += f" · {week0_filter}"
 st.markdown(f"# CFB — {year} · {season_label}")
 st.markdown("SP+ ratings vs. consensus market spreads · Edge-based ATS picks")
 st.markdown("---")
@@ -308,23 +319,33 @@ if df.empty:
     st.warning("No games returned. Try a different year or toggle postseason.")
     st.stop()
 
-df["start_date"] = df.apply(lambda r: format_game_date(r["start_date"], r["start_time_tbd"]), axis=1)
-df = df.drop(columns=["start_time_tbd"])
-
-strong = model.strong_picks(df)
-
 # ── Auto-log the current week's picks ───────────────────────────────────────────
-# Only the slate get_current_cfb_week() actually identifies as "now" — not whatever
-# year/week the sidebar happens to be showing, since a user browsing a past week
-# shouldn't silently log it (that would defeat the "recorded before kickoff" premise
-# pick_log.py exists for). Postseason isn't auto-detected as "current" (get_current_cfb_week
-# only reasons about regular-season dates), so postseason picks still need the manual button.
+# Uses the full, unfiltered df (before the Week 0/1 split below) so the log always
+# captures the whole week's picks regardless of which display filter happens to be
+# selected. Only the slate resolve_current_week() actually identifies as "now" — not
+# whatever year/week the sidebar happens to be showing, since a user browsing a past
+# week shouldn't silently log it (that would defeat the "recorded before kickoff"
+# premise pick_log.py exists for). Postseason isn't auto-detected as "current"
+# (resolve_current_week only reasons about regular-season weeks), so postseason picks
+# still need the manual button.
 is_current_slate = (not postseason) and year == default_year and week == default_week
 if is_current_slate:
     auto_log_key = f"auto_logged_{year}_{week}_{season_type}"
     if auto_log_key not in st.session_state:
         pick_log.log_picks(df, year, api_week, season_type)  # no-op if already logged
         st.session_state[auto_log_key] = True
+
+if week0_filter != "All":
+    is_week0 = df["start_date"].apply(lambda d: model.is_week_zero_game(d, year))
+    df = df[is_week0 if week0_filter == "Week 0 only" else ~is_week0].reset_index(drop=True)
+    if df.empty:
+        st.warning(f"No games found for '{week0_filter}'. Try 'All' instead.")
+        st.stop()
+
+df["start_date"] = df.apply(lambda r: format_game_date(r["start_date"], r["start_time_tbd"]), axis=1)
+df = df.drop(columns=["start_time_tbd"])
+
+strong = model.strong_picks(df)
 
 # ── Summary metrics ───────────────────────────────────────────────────────────
 c1, c2, c3, c4 = st.columns(4)

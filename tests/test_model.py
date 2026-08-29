@@ -1,4 +1,5 @@
 import math
+from datetime import date
 
 import pandas as pd
 
@@ -417,6 +418,63 @@ def test_build_picks_no_moneyline_columns_when_line_lacks_them():
     }]
     df = model.build_picks(ratings, games)
     assert "ml_pick_team" not in df.columns
+
+
+# ---------- Current-week resolution ----------
+
+SAMPLE_2026_CALENDAR = [
+    {"week": 1, "season_type": "regular", "start_date": "2026-08-29T07:00:00+00:00", "end_date": "2026-09-08T06:59:00+00:00"},
+    {"week": 2, "season_type": "regular", "start_date": "2026-09-08T07:00:00+00:00", "end_date": "2026-09-14T06:59:00+00:00"},
+    {"week": 15, "season_type": "regular", "start_date": "2026-11-28T07:00:00+00:00", "end_date": "2026-12-05T06:59:00+00:00"},
+    {"week": 1, "season_type": "postseason", "start_date": "2026-12-19T07:00:00+00:00", "end_date": "2027-01-01T06:59:00+00:00"},
+]
+
+
+def test_resolve_current_week_matches_a_week_in_progress():
+    # Regression test for the actual reported bug: Aug 29 is week 1's start date, but the
+    # old hardcoded "after September 1" cutoff treated this as still last year's week 1.
+    assert model.resolve_current_week(SAMPLE_2026_CALENDAR, 2026, date(2026, 8, 29)) == (2026, 1)
+    assert model.resolve_current_week(SAMPLE_2026_CALENDAR, 2026, date(2026, 9, 10)) == (2026, 2)
+
+
+def test_resolve_current_week_falls_back_to_last_year_before_season_starts():
+    assert model.resolve_current_week(SAMPLE_2026_CALENDAR, 2026, date(2026, 8, 1)) == (2025, 1)
+
+
+def test_resolve_current_week_caps_at_last_week_after_season_ends():
+    assert model.resolve_current_week(SAMPLE_2026_CALENDAR, 2026, date(2026, 12, 25)) == (2026, 15)
+
+
+def test_resolve_current_week_ignores_postseason_entries():
+    # The sample calendar's postseason entry covers late Dec / early Jan — resolve_current_week
+    # should still treat that as "past the regular season" (week 15), not pick up postseason.
+    assert model.resolve_current_week(SAMPLE_2026_CALENDAR, 2026, date(2026, 12, 20)) == (2026, 15)
+
+
+def test_resolve_current_week_empty_calendar_falls_back():
+    assert model.resolve_current_week([], 2026, date(2026, 9, 1)) == (2025, 1)
+
+
+# ---------- Week 0 vs Week 1 ----------
+
+def test_labor_day_is_first_monday_of_september():
+    assert model.labor_day(2026) == date(2026, 9, 7)
+    assert model.labor_day(2025) == date(2025, 9, 1)
+
+
+def test_is_week_zero_game_true_for_early_opener():
+    # Verified live: 2026's actual season-opening games (Aug 29) are what fans call Week 0.
+    assert model.is_week_zero_game("2026-08-29T16:00:00+00:00", 2026) is True
+
+
+def test_is_week_zero_game_false_for_labor_day_weekend():
+    # Verified live: the Labor Day weekend slate (Sep 5, 2026) is the "real" Week 1.
+    assert model.is_week_zero_game("2026-09-05T16:00:00+00:00", 2026) is False
+
+
+def test_is_week_zero_game_false_for_missing_date():
+    assert model.is_week_zero_game(None, 2026) is False
+    assert model.is_week_zero_game("", 2026) is False
 
 
 # ---------- Team ATS records ----------

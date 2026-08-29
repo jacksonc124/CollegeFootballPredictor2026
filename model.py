@@ -11,6 +11,7 @@ imported and unit-tested without the CFBD SDK installed.
 
 import json
 import math
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -318,6 +319,86 @@ def get_adjusted_team_metrics(bearer_token: str, year: int, cache_dir: Path = CA
     result = {r.team: {"offense_epa": r.epa.total, "defense_epa_allowed": r.epa_allowed.total} for r in rows}
     cache_file.write_text(json.dumps(result))
     return result
+
+
+def get_calendar(bearer_token: str, year: int, cache_dir: Path = CACHE_DIR) -> list[dict]:
+    """
+    Pull the real regular-season calendar (week -> date range) for a year. Returns a list
+    of {"week": int, "season_type": str, "start_date": str (ISO 8601, UTC), "end_date": str}.
+    Used by resolve_current_week() to determine the actual current week without guessing
+    from a hardcoded date cutoff.
+    """
+    import cfbd
+
+    cache_file = cache_path(f"calendar_{year}.json", cache_dir=cache_dir)
+    if cache_file.exists():
+        return json.loads(cache_file.read_text())
+
+    with make_client(bearer_token) as client:
+        weeks = cfbd.GamesApi(client).get_calendar(year=year)
+
+    result = [
+        {"week": w.week, "season_type": w.season_type, "start_date": w.start_date.isoformat(),
+         "end_date": w.end_date.isoformat()}
+        for w in weeks
+    ]
+    cache_file.write_text(json.dumps(result))
+    return result
+
+
+def resolve_current_week(calendar: list[dict], year: int, today: date) -> tuple[int, int]:
+    """
+    Determine the actual current (year, week) from a real season calendar (see
+    get_calendar), instead of guessing from a hardcoded date cutoff. CFB seasons now start
+    in mid-to-late August most years — verified live: 2026's week 1 starts Aug 29 — so a
+    fixed cutoff like "after September 1" is unreliable; it kept showing last year's week 1
+    even after this year's week 1 games had already started.
+
+    calendar should be get_calendar(bearer_token, year)'s result for the same `year` passed
+    here — i.e. the calendar for the year today falls in. Returns:
+    - (year, week) if today falls within one of calendar's regular-season week ranges
+    - (year - 1, 1) if today is before the season's first week (true offseason, or this
+      year's calendar isn't published yet)
+    - (year, last week) if today is after the regular season's last week (postseason/offseason)
+    - (year - 1, 1) if calendar is empty (no data at all)
+    """
+    regular_weeks = sorted((w for w in calendar if w["season_type"] == "regular"), key=lambda w: w["week"])
+    if not regular_weeks:
+        return year - 1, 1
+
+    for w in regular_weeks:
+        start = datetime.fromisoformat(w["start_date"]).date()
+        end = datetime.fromisoformat(w["end_date"]).date()
+        if start <= today < end:
+            return year, w["week"]
+
+    if today < datetime.fromisoformat(regular_weeks[0]["start_date"]).date():
+        return year - 1, 1
+    return year, regular_weeks[-1]["week"]
+
+
+def labor_day(year: int) -> date:
+    """The date of Labor Day (first Monday of September) for a given year."""
+    d = date(year, 9, 1)
+    while d.weekday() != 0:  # Monday == 0
+        d += timedelta(days=1)
+    return d
+
+
+def is_week_zero_game(iso_start_date: str | None, year: int) -> bool:
+    """
+    Whether a game (by its ISO start_date) is what fans call "Week 0" rather than the
+    "real" Week 1. CFBD has no such distinction — it lumps both into a single "week 1" —
+    but verified live: the actual games cluster into two groups with a multi-day gap
+    between them (2026: a handful of openers Aug 29-30, then a gap, then the Labor Day
+    weekend slate Sep 3-7). Uses the Thursday before Labor Day as the cutoff, matching
+    the conventional definition of "Week 1 = Labor Day weekend."
+    """
+    if not iso_start_date:
+        return False
+    game_date = datetime.fromisoformat(iso_start_date).date()
+    cutoff = labor_day(year) - timedelta(days=4)  # Thursday before Labor Day
+    return game_date < cutoff
 
 
 def get_team_ats_records(bearer_token: str, year: int, cache_dir: Path = CACHE_DIR) -> dict:
