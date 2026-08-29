@@ -1,5 +1,6 @@
 import math
-from datetime import date
+from datetime import date, timezone
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -475,6 +476,30 @@ def test_is_week_zero_game_false_for_labor_day_weekend():
 def test_is_week_zero_game_false_for_missing_date():
     assert model.is_week_zero_game(None, 2026) is False
     assert model.is_week_zero_game("", 2026) is False
+
+
+# ---------- "Today's games" filter ----------
+
+def test_is_game_on_date_matches_same_calendar_day_in_target_timezone():
+    assert model.is_game_on_date("2026-08-29T20:00:00+00:00", date(2026, 8, 29), timezone.utc) is True
+
+
+def test_is_game_on_date_uses_the_given_timezone_not_raw_utc_date():
+    # 2026-08-30 02:30 UTC is still 2026-08-29 10:30 PM in US Eastern (UTC-4 in August,
+    # daylight time) — a late-night ET kickoff shouldn't be misfiled as "tomorrow" just
+    # because its UTC timestamp already rolled over.
+    eastern = ZoneInfo("America/New_York")
+    assert model.is_game_on_date("2026-08-30T02:30:00+00:00", date(2026, 8, 29), eastern) is True
+    assert model.is_game_on_date("2026-08-30T02:30:00+00:00", date(2026, 8, 30), eastern) is False
+
+
+def test_is_game_on_date_false_for_a_different_day():
+    assert model.is_game_on_date("2026-08-29T20:00:00+00:00", date(2026, 8, 30), timezone.utc) is False
+
+
+def test_is_game_on_date_false_for_missing_date():
+    assert model.is_game_on_date(None, date(2026, 8, 29), timezone.utc) is False
+    assert model.is_game_on_date("", date(2026, 8, 29), timezone.utc) is False
 
 
 # ---------- Team ATS records ----------

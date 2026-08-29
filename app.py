@@ -194,6 +194,10 @@ with st.sidebar:
                  "before Labor Day).",
         )
 
+    today_only = st.checkbox("📅 Today's games only", value=False,
+                             help="Filter to just games kicking off today (in ET, matching the "
+                                  "kickoff times shown on each card).")
+
     st.markdown("### ⚙️ Model")
     home_field = st.number_input(
         "Home Field Advantage (pts)",
@@ -222,6 +226,8 @@ api_week    = None if postseason else week
 season_label = "POSTSEASON" if postseason else f"WK {week}"
 if week0_filter != "All":
     season_label += f" · {week0_filter}"
+if today_only:
+    season_label += " · Today Only"
 st.markdown(f"# CFB — {year} · {season_label}")
 st.markdown("SP+ ratings vs. consensus market spreads · Edge-based ATS picks")
 st.markdown("---")
@@ -340,6 +346,13 @@ if week0_filter != "All":
     df = df[is_week0 if week0_filter == "Week 0 only" else ~is_week0].reset_index(drop=True)
     if df.empty:
         st.warning(f"No games found for '{week0_filter}'. Try 'All' instead.")
+        st.stop()
+
+if today_only:
+    is_today = df["start_date"].apply(lambda d: model.is_game_on_date(d, date.today(), EASTERN))
+    df = df[is_today].reset_index(drop=True)
+    if df.empty:
+        st.warning("No games today for this slate. Try turning off 'Today's games only'.")
         st.stop()
 
 df["start_date"] = df.apply(lambda r: format_game_date(r["start_date"], r["start_time_tbd"]), axis=1)
