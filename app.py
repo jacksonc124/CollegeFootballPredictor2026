@@ -187,6 +187,13 @@ DISPLAY_COLUMNS = {
 }
 
 
+def tier_row_css(tier: str) -> str:
+    """Full-row background tint for a tier value, shared by every dataframe Styler that has
+    a Tier column — one definition so 'what a tinted row means' stays consistent app-wide."""
+    color = TIER_COLORS.get(tier, "")
+    return f"background-color: {color}22" if color and tier != "Pass" else ""
+
+
 # ── session state ─────────────────────────────────────────────────────────────
 if "parlay_legs" not in st.session_state:
     st.session_state["parlay_legs"] = 3
@@ -399,6 +406,13 @@ if today_only:
         st.warning("No games today for this slate. Try turning off 'Today's games only'.")
         st.stop()
 
+# Snapshot for the "Today's Games" landing tab — computed on raw (pre-format) start_date,
+# independent of the "Today's games only" sidebar checkbox, so that tab always reflects
+# literally today regardless of whether the user has that filter on.
+today_df = df[df["start_date"].apply(lambda d: model.is_game_on_date(d, date.today(), EASTERN))].copy()
+today_df["start_date"] = today_df.apply(lambda r: format_game_date(r["start_date"], r["start_time_tbd"]), axis=1)
+today_df = today_df.drop(columns=["start_time_tbd"]).reset_index(drop=True)
+
 df["start_date"] = df.apply(lambda r: format_game_date(r["start_date"], r["start_time_tbd"]), axis=1)
 df = df.drop(columns=["start_time_tbd"])
 
@@ -448,14 +462,60 @@ def logo_img(team, size=32):
 # ══════════════════════════════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════════════════════════════
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab0, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "📅  Today's Games",
     "🏆  CBS Pick'em Top 12",
     "🎰  Team Parlays",
     "💰  Moneylines & O/U",
-    "🥇  Championship Favorites",
+    "🥇  Rankings & ATS",
     "📊  Model Accuracy",
     "📈  Stats",
 ])
+
+
+# ── TAB 0: Today's Games ─────────────────────────────────────────────────────
+with tab0:
+    st.markdown(f"## 📅 Today's Games — {date.today().strftime('%A, %B %d')}")
+    st.caption("Everything kicking off today, spread/moneylines/O-U side by side · "
+               "full detail (parlays, rankings, accuracy) lives in the other tabs.")
+
+    if today_df.empty:
+        st.info("No games today in the slate currently selected in the sidebar. "
+                "Adjust Year/Week there to jump to a different day.")
+    else:
+        today_cols = ["start_date", "away_team", "home_team", "market_spread_home",
+                      "pick_team", "cover_prob", "tier"]
+        today_rename = {
+            "start_date": "Kickoff", "away_team": "Away", "home_team": "Home",
+            "market_spread_home": "Spread", "pick_team": "ATS Pick",
+            "cover_prob": "Cover Prob", "tier": "Tier",
+        }
+        if "home_moneyline" in today_df.columns:
+            today_cols += ["home_moneyline", "away_moneyline"]
+            today_rename["home_moneyline"] = "Home ML"
+            today_rename["away_moneyline"] = "Away ML"
+        if "market_total" in today_df.columns:
+            today_cols += ["market_total", "total_pick"]
+            today_rename["market_total"] = "O/U Line"
+            today_rename["total_pick"] = "Total Pick"
+
+        today_display = today_df[today_cols].rename(columns=today_rename)
+        today_display["Away"] = today_display["Away"].map(lambda t: f"{model.rank_badge(t, rankings)}{t}")
+        today_display["Home"] = today_display["Home"].map(lambda t: f"{model.rank_badge(t, rankings)}{t}")
+
+        def _shade_today_row(row):
+            return [tier_row_css(row["Tier"])] * len(row)
+
+        st.dataframe(
+            today_display.style.apply(_shade_today_row, axis=1),
+            use_container_width=True, hide_index=True,
+            column_config={
+                "Cover Prob": st.column_config.ProgressColumn("Cover Prob", min_value=0.0, max_value=1.0),
+                "Spread": st.column_config.NumberColumn("Spread", format="%+.1f"),
+            },
+        )
+        st.caption(f"{len(today_df)} game(s) today · sorted as returned by the lines provider — "
+                   "see the Pick'em tab for a ranked top 12.")
 
 
 # ── TAB 1: CBS Pick'em ────────────────────────────────────────────────────────
@@ -542,9 +602,7 @@ with tab1:
     # Subtle full-row tint (not just the Tier cell) so the strongest picks are scannable
     # at a glance without reading every row — same tier colors as everywhere else in the app.
     def _shade_row(row):
-        color = TIER_COLORS.get(row["Tier"], "")
-        style = f"background-color: {color}22" if color and row["Tier"] != "Pass" else ""
-        return [style] * len(row)
+        return [tier_row_css(row["Tier"])] * len(row)
 
     table_df = (
         filtered.drop(columns=["pick_team"]).rename(columns=DISPLAY_COLUMNS)
