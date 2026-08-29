@@ -12,6 +12,15 @@ import pick_log
 
 EASTERN = ZoneInfo("America/New_York")
 
+# Single source of truth for the app's color language (60-30-10 discipline): tier colors
+# mean ONE thing — pick confidence — and appear nowhere else. ACCENT is the neutral color
+# for UI chrome (buttons, headline numbers that aren't a tier signal) so it never competes
+# with tier meaning. These are duplicated into the <style> block below (Vega-Lite charts
+# and pandas Styler can't read CSS custom properties, so a single templated source isn't
+# practical) — keep both in sync if changing.
+TIER_COLORS = {"A": "#22c55e", "B": "#facc15", "C": "#fb923c", "Pass": "#6b7280"}
+ACCENT = "#38bdf8"
+
 
 def format_game_date(iso_start_date, start_time_tbd) -> str:
     """Format a UTC ISO start_date (from get_game_info) as an ET date, with time unless TBD."""
@@ -32,6 +41,13 @@ def format_game_date(iso_start_date, start_time_tbd) -> str:
 st.set_page_config(page_title="CFB Gambling Model", page_icon="🏈", layout="wide")
 
 # ── styling ───────────────────────────────────────────────────────────────────
+# Color discipline (60-30-10): 60% neutral background/structure, 30% text/border
+# structure, 10% color — and that 10% is reserved almost entirely for TIER color (the
+# one signal that matters: pick confidence). ACCENT (blue) is the only other color,
+# used for UI chrome that isn't a tier signal (buttons, headline stat numbers), so it
+# never gets confused with "this is a strong pick." Keep these literal hexes in sync
+# with TIER_COLORS/ACCENT above — Vega-Lite charts and pandas Styler can't read CSS
+# custom properties, so a single templated source isn't practical here.
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;600&display=swap');
@@ -45,16 +61,16 @@ st.markdown("""
     }
 
     div.stButton > button[kind="primary"] {
-        background: #22c55e; color: #0d0f14;
+        background: #38bdf8; color: #0d0f14;
         font-family: 'Bebas Neue', sans-serif; font-size: 18px;
         letter-spacing: 2px; border: none; border-radius: 6px;
         padding: 10px 32px; width: 100%; transition: background 0.2s;
     }
-    div.stButton > button[kind="primary"]:hover { background: #16a34a; color: #fff; }
+    div.stButton > button[kind="primary"]:hover { background: #0ea5e9; color: #fff; }
 
     .pickem-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+        grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
         gap: 14px; margin-top: 12px;
     }
     .pickem-card {
@@ -66,27 +82,47 @@ st.markdown("""
     .pickem-card.tier-A { border-left: 4px solid #22c55e; }
     .pickem-card.tier-B { border-left: 4px solid #facc15; }
     .pickem-card.tier-C { border-left: 4px solid #fb923c; }
-    .pickem-rank { font-family: 'Bebas Neue', sans-serif; font-size: 28px; line-height: 1; opacity: 0.4; }
-    .pickem-matchup { font-size: 13px; opacity: 0.6; }
-    .pickem-pick { font-family: 'Bebas Neue', sans-serif; font-size: 20px; letter-spacing: 1px; }
-    .pickem-meta { font-size: 11px; opacity: 0.5; }
+    .pickem-card-top { display: flex; align-items: baseline; justify-content: space-between; }
+    .pickem-rank { font-family: 'Bebas Neue', sans-serif; font-size: 24px; line-height: 1; opacity: 0.4; }
+    .pickem-tier-badge {
+        font-family: 'Bebas Neue', sans-serif; font-size: 13px; letter-spacing: 1px;
+        padding: 2px 9px; border-radius: 4px; color: #0d0f14;
+    }
+    .pickem-tier-badge.tier-A { background: #22c55e; }
+    .pickem-tier-badge.tier-B { background: #facc15; }
+    .pickem-tier-badge.tier-C { background: #fb923c; }
+    .pickem-matchup { font-size: 13px; opacity: 0.65; }
+    /* The hero number — this is this app's "score," so it gets the boldest, biggest
+       treatment on the card, matching how scores/timers read in a sports app. */
+    .pickem-hero { display: flex; align-items: baseline; gap: 10px; margin: 2px 0; }
+    .pickem-cover-prob {
+        font-family: 'Bebas Neue', sans-serif; font-size: 40px; line-height: 1;
+    }
+    .pickem-pick { font-size: 13px; opacity: 0.85; }
+    .pickem-pick b { font-size: 14px; }
+    .pickem-confidence-bar {
+        background: rgba(128,128,128,0.15); border-radius: 3px; height: 5px; width: 100%;
+        margin: 2px 0 4px;
+    }
+    .pickem-confidence-fill { border-radius: 3px; height: 5px; }
+    .pickem-meta { font-size: 11px; opacity: 0.55; line-height: 1.6; }
     .pickem-logos { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
     .pickem-vs { font-size: 11px; opacity: 0.4; }
 
     .parlay-card {
         background: var(--background-color);
-        border: 1px solid #22c55e44;
+        border: 1px solid #38bdf844;
         border-radius: 10px; padding: 16px 20px; margin-bottom: 14px;
     }
     .parlay-title {
         font-family: 'Bebas Neue', sans-serif; font-size: 22px;
-        color: #22c55e; letter-spacing: 1px; margin-bottom: 8px;
+        color: #38bdf8; letter-spacing: 1px; margin-bottom: 8px;
     }
     .parlay-leg { font-size: 13px; padding: 4px 0; border-bottom: 1px solid rgba(128,128,128,0.15); }
     .parlay-leg:last-child { border-bottom: none; }
-    .parlay-prob { font-family: 'Bebas Neue', sans-serif; font-size: 18px; color: #facc15; margin-top: 10px; }
+    .parlay-prob { font-family: 'Bebas Neue', sans-serif; font-size: 18px; color: #38bdf8; margin-top: 10px; }
 
-    .leg-display { font-family: 'Bebas Neue', sans-serif; font-size: 52px; color: #22c55e; line-height: 1; text-align: center; }
+    .leg-display { font-family: 'Bebas Neue', sans-serif; font-size: 52px; color: #38bdf8; line-height: 1; text-align: center; }
     .leg-label { font-size: 11px; opacity: 0.5; letter-spacing: 1px; text-align: center; margin-top: 2px; }
 
     .futures-grid {
@@ -106,17 +142,19 @@ st.markdown("""
     .futures-card.rank-other { border-left: 4px solid rgba(128,128,128,0.2); }
     .futures-rank { font-family: 'Bebas Neue', sans-serif; font-size: 26px; line-height: 1; opacity: 0.4; }
     .futures-name { font-family: 'Bebas Neue', sans-serif; font-size: 20px; letter-spacing: 1px; }
-    .futures-score { font-family: 'Bebas Neue', sans-serif; font-size: 22px; color: #22c55e; }
+    .futures-score { font-family: 'Bebas Neue', sans-serif; font-size: 22px; color: #38bdf8; }
     .futures-label { font-size: 11px; opacity: 0.5; }
     .bar-bg { margin-top: 6px; background: rgba(128,128,128,0.15); border-radius: 4px; height: 4px; width: 100%; }
     .bar-fill { border-radius: 4px; height: 4px; }
 
     /* Light chip behind every team logo so dark/transparent PNG artwork stays visible
-       regardless of the app's light/dark theme. */
+       regardless of the app's light/dark theme. The colored ring (set inline per-logo,
+       since it's each team's own brand color) adds a subtle bit of team identity without
+       touching text contrast — decorative only, never load-bearing for readability. */
     .logo-chip {
         display: inline-flex; align-items: center; justify-content: center;
         background: rgba(255,255,255,0.94);
-        border: 1px solid rgba(0,0,0,0.08);
+        border: 2px solid rgba(0,0,0,0.08);
         border-radius: 50%;
         flex-shrink: 0;
     }
@@ -264,6 +302,11 @@ def get_team_logos(yr):
     return model.get_team_logos(bearer_token, yr)
 
 
+@st.cache_data(show_spinner=False, ttl=86400)
+def get_team_colors(yr):
+    return model.get_team_colors(bearer_token, yr)
+
+
 @st.cache_data(show_spinner=False, ttl=3600)
 def get_scoring_stats(yr):
     # "both" so the totals model reflects every game played this season (regular +
@@ -317,6 +360,7 @@ with st.spinner("Fetching ratings, lines, and logos…"):
                                               game_info=game_info, scoring_stats=scoring_stats,
                                               adjusted_metrics=adjusted_metrics, game_weather=game_weather)
         logos            = get_team_logos(year)
+        team_colors      = get_team_colors(year)
     except Exception as e:
         st.error(f"API error: {e}")
         st.stop()
@@ -368,7 +412,6 @@ c3.metric("Tier A Picks",   len(df[df["tier"] == "A"]))
 c4.metric("Avg Cover Prob", f"{df['cover_prob'].mean():.3f}")
 
 # ── Week-at-a-glance chart ──────────────────────────────────────────────────────
-TIER_COLORS = {"A": "#22c55e", "B": "#facc15", "C": "#fb923c", "Pass": "#6b7280"}
 chart_df = df[["edge_points", "cover_prob", "tier"]].rename(
     columns={"edge_points": "Edge (pts)", "cover_prob": "Cover Prob"}
 )
@@ -382,10 +425,12 @@ st.markdown("---")
 # ── Logo helper ───────────────────────────────────────────────────────────────
 def logo_img(team, size=32):
     """
-    Render a team logo (or initials fallback) inside a light circular chip.
-    The chip guarantees contrast regardless of app theme or how dark/transparent
-    a given team's logo artwork is — some logos are otherwise invisible on a
-    dark background.
+    Render a team logo (or initials fallback) inside a light circular chip, ringed
+    with the team's real brand color when known. The chip guarantees contrast
+    regardless of app theme or how dark/transparent a given team's logo artwork is —
+    some logos are otherwise invisible on a dark background. The color ring is purely
+    decorative team identity (dynamic branding) — it never carries meaning on its own,
+    so a missing color just falls back to the neutral border, not a broken chip.
     """
     url = logos.get(team, "")
     if url:
@@ -395,7 +440,9 @@ def logo_img(team, size=32):
         inner = f'<span style="font-family:\'Bebas Neue\',sans-serif;font-size:{size // 2}px;color:#0d0f14;">{initials}</span>'
     pad = max(2, size // 8)
     chip_size = size + pad * 2
-    return f'<span class="logo-chip" style="width:{chip_size}px;height:{chip_size}px;">{inner}</span>'
+    ring_color = team_colors.get(team, "")
+    border = f'border: 2px solid {ring_color};' if ring_color else ""
+    return f'<span class="logo-chip" style="width:{chip_size}px;height:{chip_size}px;{border}">{inner}</span>'
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -430,7 +477,7 @@ with tab1:
                        "manually if you want it tracked anyway. See the Model Accuracy tab.")
     with btn_col:
         if not pick_log.already_logged(year, api_week, season_type):
-            if st.button("📌 Log Picks", key="log_picks_btn", use_container_width=True):
+            if st.button("📌 Log Picks", key="log_picks_btn", use_container_width=True, type="primary"):
                 pick_log.log_picks(df, year, api_week, season_type)
                 st.rerun()
     st.markdown("---")
@@ -459,17 +506,25 @@ with tab1:
                 site_str = f"🏠 {venue}" if venue else "🏠 Home Game"
             date_str = f"🗓 {game_date}" if game_date else ""
             note_str = f"<br/>{notes}" if notes else ""
+            tier_color = TIER_COLORS.get(tier, ACCENT)
             cards_html += (
                 f'<div class="pickem-card tier-{tier}">'
+                f'<div class="pickem-card-top">'
                 f'<div class="pickem-rank">#{i + 1}</div>'
+                f'<div class="pickem-tier-badge tier-{tier}">TIER {tier}</div>'
+                f'</div>'
                 f'<div class="pickem-logos">{logo_img(away, 32)}<span class="pickem-vs">@</span>{logo_img(home, 32)}</div>'
                 f'<div class="pickem-matchup">{model.rank_badge(away, rankings)}{away} @ '
                 f'{model.rank_badge(home, rankings)}{home}</div>'
-                f'<div class="pickem-pick">&#10003; {model.rank_badge(pick_team, rankings)}{pick_team}</div>'
+                f'<div class="pickem-hero">'
+                f'<span class="pickem-cover-prob" style="color:{tier_color};">{cover:.0%}</span>'
+                f'</div>'
+                f'<div class="pickem-confidence-bar">'
+                f'<div class="pickem-confidence-fill" style="width:{cover * 100:.0f}%;background:{tier_color};"></div>'
+                f'</div>'
+                f'<div class="pickem-pick">&#10003; Pick: <b>{model.rank_badge(pick_team, rankings)}{pick_team}</b></div>'
                 f'<div class="pickem-meta">'
-                f'Cover Prob: <b>{cover:.1%}</b> &nbsp;|&nbsp; '
-                f'Edge: <b>{edge:+.1f} pts</b> &nbsp;|&nbsp; '
-                f'Tier: <b>{tier}</b>'
+                f'Edge: <b>{edge:+.1f} pts</b>'
                 f'{"<br/>" + spread_str if spread_str else ""}'
                 f'{"<br/>" + site_str if site_str else ""}'
                 f'{"<br/>" + date_str if date_str else ""}'
@@ -484,10 +539,12 @@ with tab1:
     tier_filter = st.multiselect("Filter by Tier", ["A","B","C","Pass"], default=["A","B","C","Pass"], key="tf1")
     filtered = df[df["tier"].isin(tier_filter)] if tier_filter else df
 
-    TIER_CELL_COLORS = {"A": "#22c55e33", "B": "#facc1533", "C": "#fb923c33", "Pass": "transparent"}
-
-    def _shade_tier(val):
-        return f"background-color: {TIER_CELL_COLORS.get(val, 'transparent')}"
+    # Subtle full-row tint (not just the Tier cell) so the strongest picks are scannable
+    # at a glance without reading every row — same tier colors as everywhere else in the app.
+    def _shade_row(row):
+        color = TIER_COLORS.get(row["Tier"], "")
+        style = f"background-color: {color}22" if color and row["Tier"] != "Pass" else ""
+        return [style] * len(row)
 
     table_df = (
         filtered.drop(columns=["pick_team"]).rename(columns=DISPLAY_COLUMNS)
@@ -499,7 +556,7 @@ with tab1:
     table_df["Home"] = table_df["Home"].map(lambda t: f"{model.rank_badge(t, rankings)}{t}")
     table_df["Away"] = table_df["Away"].map(lambda t: f"{model.rank_badge(t, rankings)}{t}")
     st.dataframe(
-        table_df.style.map(_shade_tier, subset=["Tier"]),
+        table_df.style.apply(_shade_row, axis=1),
         use_container_width=True, height=min(50 + 35 * len(filtered), 600),
         column_config={
             "Cover Prob": st.column_config.ProgressColumn("Cover Prob", min_value=0.0, max_value=1.0),
@@ -675,7 +732,7 @@ def render_parlay_tab(df_inner):
                     f'{logo_img(leg["leg_team"], 20)}&nbsp;<b>{leg["leg_label"]}</b>'
                     f'&nbsp;<span style="opacity:0.5">({model.rank_badge(leg["away_team"], rankings)}{leg["away_team"]} @ '
                     f'{model.rank_badge(leg["home_team"], rankings)}{leg["home_team"]})</span>'
-                    f'&nbsp;&middot;&nbsp;Prob: <b style="color:#facc15">{leg["leg_prob"]:.1%}</b>'
+                    f'&nbsp;&middot;&nbsp;Prob: <b style="color:#38bdf8">{leg["leg_prob"]:.1%}</b>'
                     f'&nbsp;&middot;&nbsp;{leg["leg_detail"]}'
                     f'</div>'
                 )
@@ -826,7 +883,7 @@ with tab4:
                 f'<div class="futures-name">{model.rank_badge(team, rankings)}{team}</div>'
                 f'<div class="futures-score">{rating:+.1f}</div>'
                 f'<div class="futures-label">SP+ Rating</div>'
-                f'<div class="bar-bg"><div class="bar-fill" style="background:#22c55e;width:{bar_pct}%;"></div></div>'
+                f'<div class="bar-bg"><div class="bar-fill" style="background:#38bdf8;width:{bar_pct}%;"></div></div>'
                 f'</div>'
             )
         cards_html += "</div>"
@@ -856,19 +913,20 @@ with tab4:
     st.caption(f"{year} real ATS record (CFBD-graded, not a model output) · "
                "ranked by average cover margin, the size of the beat/miss vs. the closing line, not just win/loss.")
 
-    if not ats_records:
-        st.info("No ATS records available for this year yet.")
+    # get_teams_ats has no classification filter either (same situation as player
+    # season stats) — filter to FBS using the team names already fetched for logos.
+    fbs_ats_teams = set(logos.keys()) or set(ats_records.keys())
+    ats_rows = [
+        {"Team": team, "Record": model.ats_record_str(team, ats_records),
+         "Games": r["games"], "Avg Cover Margin": r["avg_cover_margin"]}
+        for team, r in ats_records.items()
+        if r["avg_cover_margin"] is not None and team in fbs_ats_teams
+    ]
+    if not ats_rows:
+        st.info("No ATS records available for this year yet — check back once games have been played.")
     else:
-        # get_teams_ats has no classification filter either (same situation as player
-        # season stats) — filter to FBS using the team names already fetched for logos.
-        fbs_ats_teams = set(logos.keys()) or set(ats_records.keys())
         ats_df = (
-            pd.DataFrame([
-                {"Team": team, "Record": model.ats_record_str(team, ats_records),
-                 "Games": r["games"], "Avg Cover Margin": r["avg_cover_margin"]}
-                for team, r in ats_records.items()
-                if r["avg_cover_margin"] is not None and team in fbs_ats_teams
-            ])
+            pd.DataFrame(ats_rows)
             .sort_values("Avg Cover Margin", ascending=False)
             .reset_index(drop=True)
         )
@@ -910,7 +968,7 @@ with tab5:
         st.info(f"This checks results for every completed week of {year} — up to ~3× the API calls the "
                 f"rest of the app uses combined. It's cached afterward (6 hours), so this only costs "
                 f"quota on the first run per season.")
-        if st.button("🔄 Run Season Backtest", key="run_accuracy"):
+        if st.button("🔄 Run Season Backtest", key="run_accuracy", type="primary"):
             st.session_state["accuracy_loaded_year"] = year
             st.rerun()
     else:
@@ -1015,7 +1073,7 @@ with tab6:
     if not stats_loaded:
         st.info(f"Fetches passing/rushing/receiving stats for every FBS player in {year} (3 API calls, "
                 f"cached afterward for 1 hour).")
-        if st.button("📊 Load Player Stats", key="run_stats"):
+        if st.button("📊 Load Player Stats", key="run_stats", type="primary"):
             st.session_state["stats_loaded_year"] = year
             st.rerun()
     else:

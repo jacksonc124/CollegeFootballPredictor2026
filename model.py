@@ -237,6 +237,32 @@ def get_team_logos(bearer_token: str, year: int, cache_dir: Path = CACHE_DIR) ->
     return logos
 
 
+def get_team_colors(bearer_token: str, year: int, cache_dir: Path = CACHE_DIR) -> dict:
+    """
+    Pull each team's real brand color (primary hex). Returns {school_name: "#rrggbb"}.
+    Non-fatal on failure — used purely for decorative accents (e.g. a colored ring around
+    a team's logo), never for anything that needs to be readable text-on-color, so a
+    missing color just means no accent, not a broken page.
+    """
+    import cfbd
+
+    cache_file = cache_path(f"team_colors_{year}.json", cache_dir=cache_dir)
+    if cache_file.exists():
+        return json.loads(cache_file.read_text())
+
+    colors: dict[str, str] = {}
+    try:
+        with make_client(bearer_token) as client:
+            for t in cfbd.TeamsApi(client).get_fbs_teams(year=year):
+                if t.color:
+                    colors[t.school] = t.color
+    except Exception as e:
+        print(f"Warning: failed to fetch team colors: {e}")
+
+    cache_file.write_text(json.dumps(colors))
+    return colors
+
+
 def get_player_season_stats(bearer_token: str, year: int, category: str, season_type: str = "regular",
                              cache_dir: Path = CACHE_DIR) -> list[dict]:
     """
