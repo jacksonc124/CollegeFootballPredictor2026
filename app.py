@@ -188,6 +188,25 @@ st.markdown("""
     .today-stat-label { opacity: 0.6; }
     .today-stat-value { font-weight: 600; }
 
+    /* Moneyline / O-U cards — same shape as Pick'em/Today cards, but these picks have no
+       tier (no A/B/C confidence bucket), so the hero number is plain ACCENT rather than a
+       tier color, and there's no colored border-left. */
+    .market-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+        gap: 14px; margin-top: 12px;
+    }
+    .market-card {
+        background: var(--background-color);
+        border: 1px solid var(--border-color);
+        border-radius: 10px; padding: 14px 16px;
+        display: flex; flex-direction: column; gap: 6px;
+    }
+    .market-hero { font-family: 'Bebas Neue', sans-serif; font-size: 36px; color: #38bdf8; line-height: 1; margin-top: 2px; }
+    .market-hero-label { font-size: 11px; opacity: 0.55; letter-spacing: 0.5px; }
+    .market-pick { font-size: 13px; opacity: 0.85; margin-top: 2px; }
+    .market-pick b { font-size: 14px; }
+
     /* Light chip behind every team logo so dark/transparent PNG artwork stays visible
        regardless of the app's light/dark theme. The colored ring (set inline per-logo,
        since it's each team's own brand color) adds a subtle bit of team identity without
@@ -927,28 +946,28 @@ with tab3:
     if ml_df.empty:
         st.info("No moneylines available for this slate's lines provider.")
     else:
-        ml_display = (
-            ml_df[["home_team", "away_team", "home_moneyline", "away_moneyline",
-                   "ml_pick_team", "ml_model_prob", "ml_market_prob", "ml_edge"]]
-            .rename(columns={
-                "home_team": "Home", "away_team": "Away",
-                "home_moneyline": "Home ML", "away_moneyline": "Away ML",
-                "ml_pick_team": "Pick", "ml_model_prob": "Model Win Prob",
-                "ml_market_prob": "Market Win Prob", "ml_edge": "Edge",
-            })
-            .sort_values("Edge", ascending=False)
-            .reset_index(drop=True)
-        )
-        ml_display["Home"] = ml_display["Home"].map(lambda t: f"{model.rank_badge(t, rankings)}{t}")
-        ml_display["Away"] = ml_display["Away"].map(lambda t: f"{model.rank_badge(t, rankings)}{t}")
-        st.dataframe(
-            ml_display, use_container_width=True, hide_index=True,
-            column_config={
-                "Model Win Prob": st.column_config.ProgressColumn("Model Win Prob", min_value=0.0, max_value=1.0),
-                "Market Win Prob": st.column_config.ProgressColumn("Market Win Prob", min_value=0.0, max_value=1.0),
-                "Edge": st.column_config.NumberColumn("Edge", format="%.3f"),
-            },
-        )
+        ml_sorted = ml_df.sort_values("ml_edge", ascending=False).reset_index(drop=True)
+        ml_cards_html = '<div class="market-grid">'
+        for _, row in ml_sorted.iterrows():
+            home, away = row["home_team"], row["away_team"]
+            pick_team  = row["ml_pick_team"]
+            ml_cards_html += (
+                f'<div class="market-card">'
+                f'<div class="pickem-logos">{logo_img(away, 28)}<span class="pickem-vs">@</span>{logo_img(home, 28)}</div>'
+                f'<div class="pickem-matchup">{model.rank_badge(away, rankings)}{away} @ '
+                f'{model.rank_badge(home, rankings)}{home}</div>'
+                f'<div class="market-hero">{row["ml_model_prob"]:.0%}</div>'
+                f'<div class="market-hero-label">MODEL WIN PROB</div>'
+                f'<div class="market-pick">&#10003; ML Pick: <b>{model.rank_badge(pick_team, rankings)}{pick_team}</b></div>'
+                f'<div class="today-stats">'
+                f'<div><span class="today-stat-label">Home ML</span><span class="today-stat-value">{row["home_moneyline"]:+.0f}</span></div>'
+                f'<div><span class="today-stat-label">Away ML</span><span class="today-stat-value">{row["away_moneyline"]:+.0f}</span></div>'
+                f'<div><span class="today-stat-label">Market Prob</span><span class="today-stat-value">{row["ml_market_prob"]:.1%}</span></div>'
+                f'<div><span class="today-stat-label">Edge</span><span class="today-stat-value">{row["ml_edge"]:+.1%}</span></div>'
+                f'</div></div>'
+            )
+        ml_cards_html += "</div>"
+        st.markdown(ml_cards_html, unsafe_allow_html=True)
         strong_ml = ml_df[ml_df["ml_edge"] >= model.ML_EDGE_THRESHOLD]
         st.caption(f"{len(strong_ml)} game(s) with edge ≥ {model.ML_EDGE_THRESHOLD:.0%} — these are the ones "
                    f"eligible for the parlay pool on the Team Parlays tab.")
@@ -957,38 +976,41 @@ with tab3:
     if total_df.empty:
         st.info("No over/under lines available, or no scoring data yet to build a predicted total.")
     else:
-        total_cols = ["home_team", "away_team", "market_total", "predicted_total",
-                      "total_edge", "total_pick", "total_cover_prob"]
-        rename_map = {
-            "home_team": "Home", "away_team": "Away", "market_total": "Market O/U",
-            "predicted_total": "Predicted Total", "total_edge": "Edge (pts)",
-            "total_pick": "Pick", "total_cover_prob": "Cover Prob",
-        }
-        if "opponent_adjustment" in total_df.columns:
-            total_cols.append("opponent_adjustment")
-            rename_map["opponent_adjustment"] = "Opp Adj"
-        if "weather_adjustment" in total_df.columns:
-            total_cols.append("weather_adjustment")
-            rename_map["weather_adjustment"] = "Weather Adj"
+        total_sorted = total_df.sort_values("total_edge", key=lambda s: s.abs(), ascending=False).reset_index(drop=True)
+        has_opp_adj = "opponent_adjustment" in total_sorted.columns
+        has_weather_adj = "weather_adjustment" in total_sorted.columns
 
-        total_display = (
-            total_df[total_cols]
-            .rename(columns=rename_map)
-            .sort_values("Edge (pts)", key=lambda s: s.abs(), ascending=False)
-            .reset_index(drop=True)
-        )
-        total_display["Home"] = total_display["Home"].map(lambda t: f"{model.rank_badge(t, rankings)}{t}")
-        total_display["Away"] = total_display["Away"].map(lambda t: f"{model.rank_badge(t, rankings)}{t}")
-        st.dataframe(
-            total_display, use_container_width=True, hide_index=True,
-            column_config={
-                "Cover Prob": st.column_config.ProgressColumn("Cover Prob", min_value=0.0, max_value=1.0),
-                "Opp Adj": st.column_config.NumberColumn("Opp Adj", format="%+.1f",
-                                                          help="Points added/removed by opponent-adjusted EPA"),
-                "Weather Adj": st.column_config.NumberColumn("Weather Adj", format="%+.1f",
-                                                              help="Points removed for wind/precipitation/snow"),
-            },
-        )
+        total_cards_html = '<div class="market-grid">'
+        for _, row in total_sorted.iterrows():
+            home, away = row["home_team"], row["away_team"]
+            cover      = row["total_cover_prob"]
+            stats_html = (
+                f'<div><span class="today-stat-label">Market O/U</span><span class="today-stat-value">{row["market_total"]:.1f}</span></div>'
+                f'<div><span class="today-stat-label">Predicted</span><span class="today-stat-value">{row["predicted_total"]:.1f}</span></div>'
+                f'<div><span class="today-stat-label">Edge (pts)</span><span class="today-stat-value">{row["total_edge"]:+.1f}</span></div>'
+            )
+            if has_opp_adj and pd.notna(row.get("opponent_adjustment")):
+                stats_html += (f'<div><span class="today-stat-label">Opp Adj</span>'
+                                f'<span class="today-stat-value">{row["opponent_adjustment"]:+.1f}</span></div>')
+            if has_weather_adj and pd.notna(row.get("weather_adjustment")):
+                stats_html += (f'<div><span class="today-stat-label">Weather Adj</span>'
+                                f'<span class="today-stat-value">{row["weather_adjustment"]:+.1f}</span></div>')
+
+            total_cards_html += (
+                f'<div class="market-card">'
+                f'<div class="pickem-logos">{logo_img(away, 28)}<span class="pickem-vs">@</span>{logo_img(home, 28)}</div>'
+                f'<div class="pickem-matchup">{model.rank_badge(away, rankings)}{away} @ '
+                f'{model.rank_badge(home, rankings)}{home}</div>'
+                f'<div class="pickem-hero"><span class="pickem-cover-prob" style="color:#38bdf8;">{cover:.0%}</span></div>'
+                f'<div class="pickem-confidence-bar">'
+                f'<div class="pickem-confidence-fill" style="width:{cover * 100:.0f}%;background:#38bdf8;"></div>'
+                f'</div>'
+                f'<div class="market-pick">&#10003; Total Pick: <b>{row["total_pick"]}</b></div>'
+                f'<div class="today-stats">{stats_html}</div>'
+                f'</div>'
+            )
+        total_cards_html += "</div>"
+        st.markdown(total_cards_html, unsafe_allow_html=True)
 
 
 # ── TAB 4: Championship Favorites ─────────────────────────────────────────────
@@ -1049,7 +1071,12 @@ with tab4:
                 .sort_values("Rank")
                 .reset_index(drop=True)
             )
-            st.dataframe(poll_df, use_container_width=True, hide_index=True, height=min(50 + 35 * len(poll_df), 600))
+            poll_df["Logo"] = poll_df["Team"].map(lambda t: logos.get(t, ""))
+            poll_df = poll_df[["Logo", "Rank", "Team"]]
+            st.dataframe(
+                poll_df, use_container_width=True, hide_index=True, height=min(50 + 35 * len(poll_df), 600),
+                column_config={"Logo": st.column_config.ImageColumn("", width="small")},
+            )
 
     st.markdown("---")
     st.markdown("### 📈 Best & Worst Against the Spread")
@@ -1073,13 +1100,17 @@ with tab4:
             .sort_values("Avg Cover Margin", ascending=False)
             .reset_index(drop=True)
         )
+        ats_df["Logo"] = ats_df["Team"].map(lambda t: logos.get(t, ""))
+        ats_df = ats_df[["Logo", "Team", "Record", "Games", "Avg Cover Margin"]]
+        ats_col_config = {"Logo": st.column_config.ImageColumn("", width="small")}
         ats_cols = st.columns(2)
         with ats_cols[0]:
             st.markdown("**Best ATS**")
-            st.dataframe(ats_df.head(10), use_container_width=True, hide_index=True)
+            st.dataframe(ats_df.head(10), use_container_width=True, hide_index=True, column_config=ats_col_config)
         with ats_cols[1]:
             st.markdown("**Worst ATS**")
-            st.dataframe(ats_df.tail(10).sort_values("Avg Cover Margin"), use_container_width=True, hide_index=True)
+            st.dataframe(ats_df.tail(10).sort_values("Avg Cover Margin"), use_container_width=True,
+                         hide_index=True, column_config=ats_col_config)
 
 
 # ── TAB 5: Model Accuracy ─────────────────────────────────────────────────────
@@ -1248,9 +1279,12 @@ with tab6:
                 "player": "Player", "team": "Team", "position": "Pos",
                 "total_yards": "Total Yards", "total_td": "Total TDs", "score": "Score",
             })
+            display["Logo"] = display["Team"].map(lambda t: logos.get(t, ""))
+            display = display[["Logo", "Player", "Team", "Pos", "Total Yards", "Total TDs", "Score"]]
             st.dataframe(
                 display, use_container_width=True, hide_index=True,
                 column_config={
+                    "Logo": st.column_config.ImageColumn("", width="small"),
                     "Total Yards": st.column_config.NumberColumn("Total Yards", format="%.0f"),
                     "Total TDs": st.column_config.NumberColumn("Total TDs", format="%.0f"),
                     "Score": st.column_config.NumberColumn("Score", format="%.0f",
@@ -1268,10 +1302,15 @@ with tab6:
             if leaders.empty:
                 st.caption("No data.")
                 return
+            leaders = leaders.rename(columns={"player": "Player", "team": "Team", "position": "Pos", "value": value_label})
+            leaders["Logo"] = leaders["Team"].map(lambda t: logos.get(t, ""))
+            leaders = leaders[["Logo", "Player", "Team", "Pos", value_label]]
             st.dataframe(
-                leaders.rename(columns={"player": "Player", "team": "Team", "position": "Pos", "value": value_label}),
-                use_container_width=True, hide_index=True,
-                column_config={value_label: st.column_config.NumberColumn(value_label, format="%.0f")},
+                leaders, use_container_width=True, hide_index=True,
+                column_config={
+                    "Logo": st.column_config.ImageColumn("", width="small"),
+                    value_label: st.column_config.NumberColumn(value_label, format="%.0f"),
+                },
             )
 
         p1, p2 = st.columns(2)
