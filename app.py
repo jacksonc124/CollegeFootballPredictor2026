@@ -1,6 +1,6 @@
 import itertools
 import os
-from datetime import date, datetime
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import streamlit as st
@@ -275,7 +275,10 @@ def get_calendar_cached(yr):
 
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
-_today = date.today()
+# date.today() is the server's system clock, not Eastern — on a UTC host it flips to
+# "tomorrow" as early as 8pm Eastern, hours before it's actually tomorrow for anyone
+# watching a game. Every "today" in this app needs to mean Eastern-today specifically.
+_today = datetime.now(EASTERN).date()
 default_year, default_week = model.resolve_current_week(get_calendar_cached(_today.year), _today.year, _today)
 
 with st.sidebar:
@@ -466,7 +469,7 @@ if week0_filter != "All":
         st.stop()
 
 if today_only:
-    is_today = df["start_date"].apply(lambda d: model.is_game_on_date(d, date.today(), EASTERN))
+    is_today = df["start_date"].apply(lambda d: model.is_game_on_date(d, _today, EASTERN))
     df = df[is_today].reset_index(drop=True)
     if df.empty:
         st.warning("No games today for this slate. Try turning off 'Today's games only'.")
@@ -475,7 +478,7 @@ if today_only:
 # Snapshot for the "Today's Games" landing tab — computed on raw (pre-format) start_date,
 # independent of the "Today's games only" sidebar checkbox, so that tab always reflects
 # literally today regardless of whether the user has that filter on.
-today_df = df[df["start_date"].apply(lambda d: model.is_game_on_date(d, date.today(), EASTERN))].copy()
+today_df = df[df["start_date"].apply(lambda d: model.is_game_on_date(d, _today, EASTERN))].copy()
 if not today_df.empty:
     # .apply(axis=1) on an empty DataFrame returns the DataFrame unchanged (not a Series),
     # which breaks the single-column assignment below — only worth doing with rows present.
@@ -556,7 +559,7 @@ tab0, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 
 # ── TAB 0: Today's Games ─────────────────────────────────────────────────────
 with tab0:
-    st.markdown(f"## 📅 Today's Games — {date.today().strftime('%A, %B %d')}")
+    st.markdown(f"## 📅 Today's Games — {_today.strftime('%A, %B %d')}")
     st.caption("Everything kicking off today, spread/moneylines/O-U side by side · "
                "full detail (parlays, rankings, accuracy) lives in the other tabs.")
 
