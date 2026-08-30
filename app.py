@@ -206,6 +206,7 @@ st.markdown("""
     .market-hero-label { font-size: 11px; opacity: 0.55; letter-spacing: 0.5px; }
     .market-pick { font-size: 13px; opacity: 0.85; margin-top: 2px; }
     .market-pick b { font-size: 14px; }
+    .neutral-badge { font-size: 11px; opacity: 0.7; margin-top: -2px; }
 
     /* Light chip behind every team logo so dark/transparent PNG artwork stays visible
        regardless of the app's light/dark theme. The colored ring (set inline per-logo,
@@ -954,11 +955,13 @@ with tab3:
         for _, row in ml_sorted.iterrows():
             home, away = row["home_team"], row["away_team"]
             pick_team  = row["ml_pick_team"]
+            neutral_html = '<div class="neutral-badge">⭐ Neutral Site</div>' if row.get("neutral_site") is True else ""
             ml_cards_html += (
                 f'<div class="market-card">'
                 f'<div class="pickem-logos">{logo_img(away, 28)}<span class="pickem-vs">@</span>{logo_img(home, 28)}</div>'
                 f'<div class="pickem-matchup">{model.rank_badge(away, rankings)}{away} @ '
                 f'{model.rank_badge(home, rankings)}{home}</div>'
+                f'{neutral_html}'
                 f'<div class="market-hero">{row["ml_model_prob"]:.0%}</div>'
                 f'<div class="market-hero-label">MODEL WIN PROB</div>'
                 f'<div class="market-pick">&#10003; ML Pick: <b>{model.rank_badge(pick_team, rankings)}{pick_team}</b></div>'
@@ -987,6 +990,7 @@ with tab3:
         for _, row in total_sorted.iterrows():
             home, away = row["home_team"], row["away_team"]
             cover      = row["total_cover_prob"]
+            neutral_html = '<div class="neutral-badge">⭐ Neutral Site</div>' if row.get("neutral_site") is True else ""
             stats_html = (
                 f'<div><span class="today-stat-label">Market O/U</span><span class="today-stat-value">{row["market_total"]:.1f}</span></div>'
                 f'<div><span class="today-stat-label">Predicted</span><span class="today-stat-value">{row["predicted_total"]:.1f}</span></div>'
@@ -1004,6 +1008,7 @@ with tab3:
                 f'<div class="pickem-logos">{logo_img(away, 28)}<span class="pickem-vs">@</span>{logo_img(home, 28)}</div>'
                 f'<div class="pickem-matchup">{model.rank_badge(away, rankings)}{away} @ '
                 f'{model.rank_badge(home, rankings)}{home}</div>'
+                f'{neutral_html}'
                 f'<div class="pickem-hero"><span class="pickem-cover-prob" style="color:#38bdf8;">{cover:.0%}</span></div>'
                 f'<div class="pickem-confidence-bar">'
                 f'<div class="pickem-confidence-fill" style="width:{cover * 100:.0f}%;background:#38bdf8;"></div>'
