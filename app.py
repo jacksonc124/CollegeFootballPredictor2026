@@ -1245,18 +1245,26 @@ with tab5:
         with st.spinner("Grading logged picks against final scores…"):
             graded_log = pick_log.grade_logged_picks(bearer_token)
         log_acc = backtest.overall_accuracy(graded_log)
+        # This log is never cleared — a new slate gets auto-logged every time the "current
+        # week" changes, so these numbers are a running total across every slate ever
+        # logged, not just the current week's ~50 games. Surfacing the slate count here
+        # (instead of leaving people to infer it from "92 seems like a lot") makes that
+        # explicit instead of reading like a possible bug.
+        week_record = pick_log.summarize_by_week(graded_log)
         if log_acc["n"] == 0:
             st.info(f"{len(logged_df)} pick(s) logged, but none have final scores yet.")
         else:
-            lg1, lg2, lg3 = st.columns(3)
+            lg1, lg2, lg3, lg4 = st.columns(4)
             lg1.metric("Logged Picks Graded", log_acc["n"])
             lg2.metric("Win Rate", f"{log_acc['win_rate']:.1%}" if log_acc["win_rate"] is not None else "—")
             lg3.metric("Wins / Losses", f"{log_acc['wins']} / {log_acc['losses']}")
+            lg4.metric("Slates Logged", len(week_record))
+            st.caption(f"Cumulative across {len(week_record)} logged slate(s) — see Record by week below "
+                       f"for the breakdown per slate.")
 
         st.markdown("#### Record by week")
         st.caption("Every logged slate, win/loss record once results are in — 'Pending' means it's "
                    "logged but the games haven't finished yet.")
-        week_record = pick_log.summarize_by_week(graded_log)
         # Built from logged_df (not logged_weeks()'s list-of-tuples helper) so the merge
         # key columns share the exact same dtypes as week_record's — both ultimately trace
         # back to the same load_log() call, avoiding a None-vs-NaN dtype mismatch on the
