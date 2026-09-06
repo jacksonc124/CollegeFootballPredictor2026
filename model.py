@@ -263,6 +263,31 @@ def get_team_colors(bearer_token: str, year: int, cache_dir: Path = CACHE_DIR) -
     return colors
 
 
+def get_team_conferences(bearer_token: str, year: int, cache_dir: Path = CACHE_DIR) -> dict:
+    """
+    Pull each FBS team's conference. Returns {school_name: conference_name}. Non-fatal on
+    failure — used for a conference filter, so a missing/empty result just means the
+    filter has no options rather than a broken page.
+    """
+    import cfbd
+
+    cache_file = cache_path(f"team_conferences_{year}.json", cache_dir=cache_dir)
+    if cache_file.exists():
+        return json.loads(cache_file.read_text())
+
+    conferences: dict[str, str] = {}
+    try:
+        with make_client(bearer_token) as client:
+            for t in cfbd.TeamsApi(client).get_fbs_teams(year=year):
+                if t.conference:
+                    conferences[t.school] = t.conference
+    except Exception as e:
+        print(f"Warning: failed to fetch team conferences: {e}")
+
+    cache_file.write_text(json.dumps(conferences))
+    return conferences
+
+
 def get_player_season_stats(bearer_token: str, year: int, category: str, season_type: str = "regular",
                              cache_dir: Path = CACHE_DIR) -> list[dict]:
     """

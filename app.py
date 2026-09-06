@@ -289,6 +289,20 @@ def get_calendar_cached(yr):
         return []
 
 
+# Defined here (rather than alongside the rest of the cached wrappers, further down) because
+# the sidebar needs team names/conferences for the Favorite Team and Conferences controls,
+# and the sidebar renders before that section. Both only depend on `year`, not week/season_type,
+# so fetching them this early costs nothing extra — same cached value either way.
+@st.cache_data(show_spinner=False, ttl=86400)
+def get_team_logos(yr):
+    return model.get_team_logos(bearer_token, yr)
+
+
+@st.cache_data(show_spinner=False, ttl=86400)
+def get_team_conferences(yr):
+    return model.get_team_conferences(bearer_token, yr)
+
+
 # ── sidebar ───────────────────────────────────────────────────────────────────
 # date.today() is the server's system clock, not Eastern — on a UTC host it flips to
 # "tomorrow" as early as 8pm Eastern, hours before it's actually tomorrow for anyone
@@ -324,6 +338,30 @@ with st.sidebar:
     today_only = st.checkbox("📅 Today's games only", value=False,
                              help="Filter to just games kicking off today (in ET, matching the "
                                   "kickoff times shown on each card).")
+
+    # Both only depend on `year`, fetched here (not in the main fetch block below, which
+    # doesn't run until after the sidebar) so these controls have real options on first
+    # render. Caught broadly and degraded to "no options" rather than crashing the sidebar —
+    # e.g. if cfbd isn't installed yet, that's reported by the friendlier check further down.
+    try:
+        _sidebar_team_names = sorted(get_team_logos(year).keys())
+        _sidebar_conferences = sorted(set(get_team_conferences(year).values()))
+    except Exception:
+        _sidebar_team_names, _sidebar_conferences = [], []
+
+    st.markdown("### ⭐ Your Team")
+    favorite_team = st.selectbox(
+        "Favorite Team", options=["— None —"] + _sidebar_team_names,
+        help="Highlights this team's game wherever it shows up in the current slate.",
+    )
+    if favorite_team == "— None —":
+        favorite_team = None
+
+    selected_conferences = st.multiselect(
+        "🏟️ Conferences", options=_sidebar_conferences, default=_sidebar_conferences,
+        help="Only show games involving at least one team from these conferences. "
+             "Leave everything selected to show every conference.",
+    )
 
     # Home Field Advantage is a rarely-touched tuning knob, not a day-to-day nav control —
     # tucked away so the sidebar's main job (picking a slate) isn't cluttered by it.
@@ -386,11 +424,6 @@ def get_weekly_lines(yr, wk, stype):
 @st.cache_data(show_spinner=False, ttl=3600)
 def get_game_info(yr, wk, stype):
     return model.get_game_info(bearer_token, yr, wk, stype)
-
-
-@st.cache_data(show_spinner=False, ttl=86400)
-def get_team_logos(yr):
-    return model.get_team_logos(bearer_token, yr)
 
 
 @st.cache_data(show_spinner=False, ttl=86400)
@@ -475,6 +508,20 @@ if is_current_slate:
     if auto_log_key not in st.session_state:
         pick_log.log_picks(df, year, api_week, season_type)  # no-op if already logged
         st.session_state[auto_log_key] = True
+
+# Applied after auto-logging (above), not before — the pick log is meant to be a complete
+# record of the slate for accuracy tracking, and shouldn't silently shrink just because
+# the user happened to have a conference filter narrowed down while it fired.
+if selected_conferences and len(selected_conferences) < len(_sidebar_conferences):
+    team_conferences = get_team_conferences(year)
+    in_selected_conf = (
+        df["home_team"].map(team_conferences).isin(selected_conferences)
+        | df["away_team"].map(team_conferences).isin(selected_conferences)
+    )
+    df = df[in_selected_conf].reset_index(drop=True)
+    if df.empty:
+        st.warning("No games match the selected conferences. Try selecting more.")
+        st.stop()
 
 if week0_filter != "All":
     is_week0 = df["start_date"].apply(lambda d: model.is_week_zero_game(d, year))
@@ -568,6 +615,59 @@ def logo_img(team, size=32):
     return f'<span class="logo-chip" style="width:{chip_size}px;height:{chip_size}px;{border}">{inner}</span>'
 
 
+def fav_star(team: str) -> str:
+    """A small marker for the sidebar's favorite team, prefixed the same way rank_badge()
+    prefixes AP/Coaches rank — so it's visible in any listing without a dedicated card."""
+    return "⭐ " if favorite_team and team == favorite_team else ""
+
+
+# ── Favorite team highlight ──────────────────────────────────────────────────────
+if favorite_team:
+    fav_rows = df[(df["home_team"] == favorite_team) | (df["away_team"] == favorite_team)]
+    if fav_rows.empty:
+        st.info(f"⭐ {favorite_team} isn't playing in this slate.")
+    else:
+        row = fav_rows.iloc[0]
+        tier, home, away       = row["tier"], row["home_team"], row["away_team"]
+        pick_team, cover, edge = row["pick_team"], row["cover_prob"], row["edge_points"]
+        spread                 = row["market_spread_home"]
+        neutral_site           = row.get("neutral_site")
+        venue                  = row.get("venue") or ""
+        game_date              = row.get("start_date") or ""
+        tier_color             = TIER_COLORS.get(tier, ACCENT)
+        if neutral_site is None:
+            site_str = ""
+        elif neutral_site:
+            site_str = f"🏟 {venue}" if venue else "🏟 Neutral Site"
+        else:
+            site_str = f"🏠 {venue}" if venue else "🏠 Home Game"
+
+        st.markdown(
+            f'<div class="pickem-card tier-{tier}" style="max-width:420px;">'
+            f'<div class="pickem-card-top">'
+            f'<div class="pickem-rank">⭐ Your Team</div>'
+            f'<div class="pickem-tier-badge tier-{tier}">TIER {tier}</div>'
+            f'</div>'
+            f'<div class="pickem-logos">{logo_img(away, 32)}<span class="pickem-vs">@</span>{logo_img(home, 32)}</div>'
+            f'<div class="pickem-matchup">{fav_star(away)}{model.rank_badge(away, rankings)}{away} @ '
+            f'{fav_star(home)}{model.rank_badge(home, rankings)}{home}</div>'
+            f'<div class="pickem-hero">'
+            f'<span class="pickem-cover-prob" style="color:{tier_color};">{cover:.0%}</span>'
+            f'</div>'
+            f'<div class="pickem-confidence-bar">'
+            f'<div class="pickem-confidence-fill" style="width:{cover * 100:.0f}%;background:{tier_color};"></div>'
+            f'</div>'
+            f'<div class="pickem-pick">&#10003; Pick: <b>{model.rank_badge(pick_team, rankings)}{pick_team}</b></div>'
+            f'<div class="pickem-meta">'
+            f'Edge: <b>{edge:+.1f} pts</b> &nbsp;|&nbsp; Spread: {spread:+.1f}'
+            f'{"<br/>" + site_str if site_str else ""}'
+            f'{"<br/>🗓 " + game_date if game_date else ""}'
+            f'</div></div>',
+            unsafe_allow_html=True,
+        )
+    st.markdown("---")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -632,8 +732,8 @@ with tab0:
                 f'<div class="pickem-tier-badge tier-{tier}">TIER {tier}</div>'
                 f'</div>'
                 f'<div class="pickem-logos">{logo_img(away, 32)}<span class="pickem-vs">@</span>{logo_img(home, 32)}</div>'
-                f'<div class="pickem-matchup">{model.rank_badge(away, rankings)}{away} @ '
-                f'{model.rank_badge(home, rankings)}{home}</div>'
+                f'<div class="pickem-matchup">{fav_star(away)}{model.rank_badge(away, rankings)}{away} @ '
+                f'{fav_star(home)}{model.rank_badge(home, rankings)}{home}</div>'
                 f'<div class="pickem-hero">'
                 f'<span class="pickem-cover-prob" style="color:{tier_color};">{cover:.0%}</span>'
                 f'</div>'
@@ -714,8 +814,8 @@ with tab1:
                 f'<div class="pickem-tier-badge tier-{tier}">TIER {tier}</div>'
                 f'</div>'
                 f'<div class="pickem-logos">{logo_img(away, 32)}<span class="pickem-vs">@</span>{logo_img(home, 32)}</div>'
-                f'<div class="pickem-matchup">{model.rank_badge(away, rankings)}{away} @ '
-                f'{model.rank_badge(home, rankings)}{home}</div>'
+                f'<div class="pickem-matchup">{fav_star(away)}{model.rank_badge(away, rankings)}{away} @ '
+                f'{fav_star(home)}{model.rank_badge(home, rankings)}{home}</div>'
                 f'<div class="pickem-hero">'
                 f'<span class="pickem-cover-prob" style="color:{tier_color};">{cover:.0%}</span>'
                 f'</div>'
@@ -752,8 +852,8 @@ with tab1:
     # ATS lookups use the clean team name, so compute them before the rank-badge prefix is added.
     table_df["Home ATS"] = table_df["Home"].map(lambda t: model.ats_record_str(t, ats_records))
     table_df["Away ATS"] = table_df["Away"].map(lambda t: model.ats_record_str(t, ats_records))
-    table_df["Home"] = table_df["Home"].map(lambda t: f"{model.rank_badge(t, rankings)}{t}")
-    table_df["Away"] = table_df["Away"].map(lambda t: f"{model.rank_badge(t, rankings)}{t}")
+    table_df["Home"] = table_df["Home"].map(lambda t: f"{fav_star(t)}{model.rank_badge(t, rankings)}{t}")
+    table_df["Away"] = table_df["Away"].map(lambda t: f"{fav_star(t)}{model.rank_badge(t, rankings)}{t}")
     st.dataframe(
         table_df.style.apply(_shade_row, axis=1),
         use_container_width=True, height=min(50 + 35 * len(filtered), 600),
@@ -1013,8 +1113,8 @@ with tab3:
             ml_cards_html += (
                 f'<div class="market-card">'
                 f'<div class="pickem-logos">{logo_img(away, 28)}<span class="pickem-vs">@</span>{logo_img(home, 28)}</div>'
-                f'<div class="pickem-matchup">{model.rank_badge(away, rankings)}{away} @ '
-                f'{model.rank_badge(home, rankings)}{home}</div>'
+                f'<div class="pickem-matchup">{fav_star(away)}{model.rank_badge(away, rankings)}{away} @ '
+                f'{fav_star(home)}{model.rank_badge(home, rankings)}{home}</div>'
                 f'{neutral_html}'
                 f'<div class="market-hero">{row["ml_model_prob"]:.0%}</div>'
                 f'<div class="market-hero-label">MODEL WIN PROB</div>'
@@ -1056,8 +1156,8 @@ with tab3:
             total_cards_html += (
                 f'<div class="market-card">'
                 f'<div class="pickem-logos">{logo_img(away, 28)}<span class="pickem-vs">@</span>{logo_img(home, 28)}</div>'
-                f'<div class="pickem-matchup">{model.rank_badge(away, rankings)}{away} @ '
-                f'{model.rank_badge(home, rankings)}{home}</div>'
+                f'<div class="pickem-matchup">{fav_star(away)}{model.rank_badge(away, rankings)}{away} @ '
+                f'{fav_star(home)}{model.rank_badge(home, rankings)}{home}</div>'
                 f'{neutral_html}'
                 f'<div class="pickem-hero"><span class="pickem-cover-prob" style="color:#38bdf8;">{cover:.0%}</span></div>'
                 f'<div class="pickem-confidence-bar">'
