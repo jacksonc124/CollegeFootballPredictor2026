@@ -350,12 +350,27 @@ with st.sidebar:
         _sidebar_team_names, _sidebar_conferences = [], []
 
     st.markdown("### ⭐ Your Team")
+    # No login system exists here, so there's no per-user account to attach this to —
+    # the closest real equivalent is making it sticky for this browser via the URL's
+    # query string, which survives reloads and works from a bookmark. Query params are
+    # per-tab/URL, not a synced account, so it won't follow across a different browser
+    # or an incognito window; that's an honest limit of "persistent" without auth.
+    NO_FAVORITE = "— None —"
+    favorite_options = [NO_FAVORITE] + _sidebar_team_names
+    default_favorite = st.query_params.get("favorite_team", NO_FAVORITE)
+    if default_favorite not in favorite_options:
+        default_favorite = NO_FAVORITE
+
     favorite_team = st.selectbox(
-        "Favorite Team", options=["— None —"] + _sidebar_team_names,
-        help="Highlights this team's game wherever it shows up in the current slate.",
+        "Favorite Team", options=favorite_options, index=favorite_options.index(default_favorite),
+        help="Highlights this team's game wherever it shows up in the current slate. Saved in "
+             "the page's URL — reloading or revisiting that URL (e.g. from a bookmark) remembers it.",
     )
-    if favorite_team == "— None —":
+    if favorite_team == NO_FAVORITE:
         favorite_team = None
+        st.query_params.pop("favorite_team", None)
+    else:
+        st.query_params["favorite_team"] = favorite_team
 
     selected_conferences = st.multiselect(
         "🏟️ Conferences", options=_sidebar_conferences, default=_sidebar_conferences,
