@@ -489,6 +489,16 @@ today_df = today_df.drop(columns=["start_time_tbd"]).reset_index(drop=True)
 df["start_date"] = df.apply(lambda r: format_game_date(r["start_date"], r["start_time_tbd"]), axis=1)
 df = df.drop(columns=["start_time_tbd"])
 
+# model_spread_home is stored as a rating differential (positive = home team rated
+# better/favored) — the opposite sign convention from market_spread_home (CFBD/Vegas:
+# negative = home favored). Showing both raw side by side in the All Games table reads
+# as if they disagree on who's favored when they don't (e.g. model +23.8 / market -26.5
+# both mean "home favored," just in opposite notations) — flip it here, display-only,
+# so "Model Spread" reads the same way as "Market Spread" already does. Nothing else in
+# this file, pick_log.py, or backtest.py reads model_spread_home, so this is safe to
+# negate in place rather than adding a parallel display column.
+df["model_spread_home"] = -df["model_spread_home"]
+
 strong = model.strong_picks(df)
 
 # ── Summary metrics ───────────────────────────────────────────────────────────
