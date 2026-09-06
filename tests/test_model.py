@@ -39,6 +39,37 @@ def test_pick_line_returns_none_when_no_lines():
     assert model.pick_line({}, "consensus") is None
 
 
+def test_best_market_lines_picks_the_best_number_per_side():
+    lines = [
+        {"provider": "Bovada", "spread": -7.0, "home_moneyline": -280, "away_moneyline": 220},
+        {"provider": "DraftKings", "spread": -6.5, "home_moneyline": -260, "away_moneyline": 240},
+        {"provider": "consensus", "spread": -7.5, "home_moneyline": -300, "away_moneyline": 210},
+    ]
+    best = model.best_market_lines(lines)
+    # Home side: least points to lay as favorite -> -6.5 (DraftKings). Home ML: highest price -> -260 (DraftKings).
+    assert best["home_spread"] == {"value": -6.5, "provider": "DraftKings"}
+    assert best["home_ml"] == {"value": -260, "provider": "DraftKings"}
+    # Away side: most points to get as underdog -> the home spread's min, negated -> +7.5 (consensus).
+    # Away ML: highest price -> +240 (DraftKings).
+    assert best["away_spread"] == {"value": 7.5, "provider": "consensus"}
+    assert best["away_ml"] == {"value": 240, "provider": "DraftKings"}
+
+
+def test_best_market_lines_skips_missing_quotes():
+    lines = [
+        {"provider": "A", "spread": None, "home_moneyline": None, "away_moneyline": 150},
+        {"provider": "B", "spread": -3.0, "home_moneyline": -120, "away_moneyline": None},
+    ]
+    best = model.best_market_lines(lines)
+    assert best["home_spread"] == {"value": -3.0, "provider": "B"}
+    assert best["home_ml"] == {"value": -120, "provider": "B"}
+    assert best["away_ml"] == {"value": 150, "provider": "A"}
+
+
+def test_best_market_lines_empty_when_no_lines():
+    assert model.best_market_lines([]) == {}
+
+
 def test_score_game_home_favored_and_covering():
     # Home is 10 pts better on SP+, home field +2.5, market has home favored by 3.
     # model_spread_home = 12.5, market_spread = -3 -> edge = 9.5 (home side)
@@ -132,6 +163,37 @@ def test_build_picks_threads_through_start_date_and_tbd_flag():
     assert no_info.iloc[0]["start_date"] is None
     assert no_info.iloc[0]["start_time_tbd"] is None
     assert no_info.iloc[0]["venue"] == ""
+
+
+def test_build_picks_attaches_best_line_for_the_side_actually_picked():
+    # Home is far better -> model picks Home U both ATS and ML. pick_line() (consensus)
+    # scores the game, but the best number for backing Home U sits at a different book.
+    ratings = {"Home U": 20.0, "Away U": 5.0}
+    games = [{
+        "home_team": "Home U", "away_team": "Away U",
+        "lines": [
+            {"provider": "consensus", "spread": -10.0, "home_moneyline": -400, "away_moneyline": 320},
+            {"provider": "Bovada", "spread": -9.0, "home_moneyline": -350, "away_moneyline": 300},
+        ],
+    }]
+    df = model.build_picks(ratings, games, provider="consensus")
+    row = df.iloc[0]
+    assert row["pick_team"] == "Home U"
+    assert row["best_spread_value"] == -9.0
+    assert row["best_spread_provider"] == "Bovada"
+    assert row["ml_pick_team"] == "Home U"
+    assert row["best_ml_value"] == -350
+    assert row["best_ml_provider"] == "Bovada"
+
+
+def test_build_picks_omits_best_line_columns_when_pick_team_is_empty():
+    # Pick'em market with equal ratings -> NO EDGE, no pick_team -> nothing to shop for.
+    ratings = {"Home U": 10.0, "Away U": 10.0}
+    games = [{"home_team": "Home U", "away_team": "Away U",
+              "lines": [{"provider": "consensus", "spread": 0.0}]}]
+    df = model.build_picks(ratings, games, home_field=0.0)
+    assert df.iloc[0]["pick_team"] == ""
+    assert "best_spread_value" not in df.columns
 
 
 def test_build_picks_empty_games_returns_empty_dataframe():

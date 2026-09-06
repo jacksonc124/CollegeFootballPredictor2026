@@ -554,6 +554,45 @@ def pick_line(game: dict, provider_preference: str) -> dict | None:
     return lines[0]
 
 
+def best_market_lines(lines: list[dict]) -> dict:
+    """
+    Scan every provider's line for one game (get_weekly_lines' "lines" list) and find the
+    single best number per side/market, instead of the one provider pick_line() picked for
+    the model's own math. CFBD already returns every book's number; nothing else in this
+    app looks past whichever one it uses for scoring.
+
+    "Best" always means "maximum" once expressed as points/price for your side: on the
+    home side, a higher spread value means fewer points to lay as favorite or more points
+    to get as underdog — always better, whichever way it's currently trending. The away
+    side's spread is the home spread negated, so the away side's best is the *minimum*
+    home spread across books. For a moneyline, a higher price is always better for that
+    side, favorite or underdog alike.
+
+    Returns a dict with any of "home_spread", "away_spread", "home_ml", "away_ml" that had
+    at least one non-null quote, each mapping to {"value": float, "provider": str}. A
+    market with no quotes anywhere is simply absent from the result, not a zero/None entry.
+    """
+    best: dict[str, dict] = {}
+
+    def consider(key: str, value: float | None, provider: str) -> None:
+        if value is None:
+            return
+        current = best.get(key)
+        if current is None or value > current["value"]:
+            best[key] = {"value": value, "provider": provider}
+
+    for ln in lines:
+        provider = ln.get("provider") or "Unknown"
+        spread = ln.get("spread")
+        if spread is not None:
+            consider("home_spread", spread, provider)
+            consider("away_spread", -spread, provider)
+        consider("home_ml", ln.get("home_moneyline"), provider)
+        consider("away_ml", ln.get("away_moneyline"), provider)
+
+    return best
+
+
 # ---------- Core model (pure — no I/O) ----------
 
 def score_game(home: str, away: str, home_rating: float, away_rating: float, market_spread: float,
@@ -834,6 +873,23 @@ def build_picks(ratings: dict, games: list[dict], provider: str = DEFAULT_PROVID
                                      game_home_field, std)
         if ml_result:
             row.update(ml_result)
+
+        # Line shopping: pick_line() above picked one provider's line for the model's own
+        # math, but CFBD returned every book's number for this game — surface the best
+        # available price for whichever side the model actually picked, so a bettor isn't
+        # stuck with the (possibly worse) consensus number just because that's what scored
+        # the game.
+        best_lines = best_market_lines(game.get("lines") or [])
+        if row["pick_team"]:
+            best_spread = best_lines.get("home_spread" if row["pick_team"] == home else "away_spread")
+            if best_spread:
+                row["best_spread_value"] = best_spread["value"]
+                row["best_spread_provider"] = best_spread["provider"]
+        if ml_result:
+            best_ml = best_lines.get("home_ml" if ml_result["ml_pick_team"] == home else "away_ml")
+            if best_ml:
+                row["best_ml_value"] = best_ml["value"]
+                row["best_ml_provider"] = best_ml["provider"]
 
         rows.append(row)
     return pd.DataFrame(rows)

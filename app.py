@@ -245,6 +245,8 @@ DISPLAY_COLUMNS = {
     "edge_points": "Edge (pts)", "cover_prob": "Cover Prob", "tier": "Tier",
     "model_pick": "Pick", "neutral_site": "Neutral Site", "game_notes": "Game",
     "start_date": "Date", "venue": "Venue",
+    "best_spread_value": "Best Spread", "best_spread_provider": "Best Spread Book",
+    "best_ml_value": "Best ML", "best_ml_provider": "Best ML Book",
 }
 
 
@@ -684,6 +686,14 @@ with tab1:
                 site_str = f"🏠 {venue}" if venue else "🏠 Home Game"
             date_str = f"🗓 {game_date}" if game_date else ""
             note_str = f"<br/>{notes}" if notes else ""
+            # Line shopping: only worth a line when some other book actually beats the
+            # number already shown above (a tie or worse isn't "extra value").
+            best_str = ""
+            best_spread = row.get("best_spread_value")
+            if pd.notna(best_spread) and spread is not None:
+                shown_side_spread = spread if pick_team == home else -spread
+                if best_spread > shown_side_spread:
+                    best_str = f"🛒 Best: {best_spread:+.1f} @ {row['best_spread_provider']}"
             tier_color = TIER_COLORS.get(tier, ACCENT)
             cards_html += (
                 f'<div class="pickem-card tier-{tier}">'
@@ -704,6 +714,7 @@ with tab1:
                 f'<div class="pickem-meta">'
                 f'Edge: <b>{edge:+.1f} pts</b>'
                 f'{"<br/>" + spread_str if spread_str else ""}'
+                f'{"<br/>" + best_str if best_str else ""}'
                 f'{"<br/>" + site_str if site_str else ""}'
                 f'{"<br/>" + date_str if date_str else ""}'
                 f'{note_str}'
@@ -742,6 +753,12 @@ with tab1:
             "SP+ Home": st.column_config.NumberColumn("SP+ Home", format="%+.1f"),
             "SP+ Away": st.column_config.NumberColumn("SP+ Away", format="%+.1f"),
             "Neutral Site": st.column_config.CheckboxColumn("Neutral Site"),
+            "Best Spread": st.column_config.NumberColumn("Best Spread", format="%+.1f",
+                                                           help="Best available spread across every book CFBD returned "
+                                                                "for whichever side the model picked ATS."),
+            "Best ML": st.column_config.NumberColumn("Best ML", format="%+.0f",
+                                                       help="Best available moneyline price across every book CFBD "
+                                                            "returned for whichever side the model picked straight-up."),
         },
     )
     st.markdown("---")
@@ -966,6 +983,21 @@ with tab3:
             home, away = row["home_team"], row["away_team"]
             pick_team  = row["ml_pick_team"]
             neutral_html = '<div class="neutral-badge">⭐ Neutral Site</div>' if row.get("neutral_site") is True else ""
+            ml_stats_html = (
+                f'<div><span class="today-stat-label">Home ML</span><span class="today-stat-value">{row["home_moneyline"]:+.0f}</span></div>'
+                f'<div><span class="today-stat-label">Away ML</span><span class="today-stat-value">{row["away_moneyline"]:+.0f}</span></div>'
+                f'<div><span class="today-stat-label">Market Prob</span><span class="today-stat-value">{row["ml_market_prob"]:.1%}</span></div>'
+                f'<div><span class="today-stat-label">Edge</span><span class="today-stat-value">{row["ml_edge"]:+.1%}</span></div>'
+            )
+            # Only worth surfacing when some other book actually beats the price already shown.
+            best_ml = row.get("best_ml_value")
+            if pd.notna(best_ml):
+                shown_ml = row["home_moneyline"] if pick_team == home else row["away_moneyline"]
+                if best_ml > shown_ml:
+                    ml_stats_html += (
+                        f'<div><span class="today-stat-label">🛒 Best ML</span>'
+                        f'<span class="today-stat-value">{best_ml:+.0f} @ {row["best_ml_provider"]}</span></div>'
+                    )
             ml_cards_html += (
                 f'<div class="market-card">'
                 f'<div class="pickem-logos">{logo_img(away, 28)}<span class="pickem-vs">@</span>{logo_img(home, 28)}</div>'
@@ -975,12 +1007,8 @@ with tab3:
                 f'<div class="market-hero">{row["ml_model_prob"]:.0%}</div>'
                 f'<div class="market-hero-label">MODEL WIN PROB</div>'
                 f'<div class="market-pick">&#10003; ML Pick: <b>{model.rank_badge(pick_team, rankings)}{pick_team}</b></div>'
-                f'<div class="today-stats">'
-                f'<div><span class="today-stat-label">Home ML</span><span class="today-stat-value">{row["home_moneyline"]:+.0f}</span></div>'
-                f'<div><span class="today-stat-label">Away ML</span><span class="today-stat-value">{row["away_moneyline"]:+.0f}</span></div>'
-                f'<div><span class="today-stat-label">Market Prob</span><span class="today-stat-value">{row["ml_market_prob"]:.1%}</span></div>'
-                f'<div><span class="today-stat-label">Edge</span><span class="today-stat-value">{row["ml_edge"]:+.1%}</span></div>'
-                f'</div></div>'
+                f'<div class="today-stats">{ml_stats_html}</div>'
+                f'</div>'
             )
         ml_cards_html += "</div>"
         st.markdown(ml_cards_html, unsafe_allow_html=True)
