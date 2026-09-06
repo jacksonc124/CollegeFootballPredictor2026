@@ -116,3 +116,50 @@ def test_grade_logged_picks_empty_log_returns_empty(log_paths):
     _, log_file = log_paths
     result = pick_log.grade_logged_picks("fake-token", log_file=log_file)
     assert result.empty
+
+
+def test_summarize_by_week_groups_by_year_week_and_season_type():
+    graded = pd.DataFrame([
+        {"year": 2025, "week": 3, "season_type": "regular", "outcome": "win"},
+        {"year": 2025, "week": 3, "season_type": "regular", "outcome": "loss"},
+        {"year": 2025, "week": 3, "season_type": "regular", "outcome": "win"},
+        {"year": 2026, "week": 3, "season_type": "regular", "outcome": "win"},  # different year, same week number
+        {"year": 2025, "week": 4, "season_type": "regular", "outcome": "loss"},
+        {"year": 2025, "week": 4, "season_type": "regular", "outcome": None},  # ungraded, excluded
+        {"year": 2025, "week": 5, "season_type": "regular", "outcome": "push"},  # push, excluded
+    ])
+    summary = pick_log.summarize_by_week(graded)
+
+    wk3_2025 = summary[(summary["year"] == 2025) & (summary["week"] == 3)].iloc[0]
+    assert wk3_2025["n"] == 3
+    assert wk3_2025["wins"] == 2
+    assert wk3_2025["losses"] == 1
+    assert wk3_2025["win_rate"] == pytest.approx(2 / 3)
+
+    wk3_2026 = summary[(summary["year"] == 2026) & (summary["week"] == 3)].iloc[0]
+    assert wk3_2026["n"] == 1
+    assert wk3_2026["wins"] == 1
+
+    wk4_2025 = summary[(summary["year"] == 2025) & (summary["week"] == 4)].iloc[0]
+    assert wk4_2025["n"] == 1  # the ungraded row doesn't count
+
+    assert not ((summary["year"] == 2025) & (summary["week"] == 5)).any()  # push-only week is absent
+
+
+def test_summarize_by_week_keeps_postseason_none_week_as_its_own_group():
+    graded = pd.DataFrame([
+        {"year": 2025, "week": None, "season_type": "postseason", "outcome": "win"},
+        {"year": 2025, "week": 14, "season_type": "regular", "outcome": "loss"},
+    ])
+    summary = pick_log.summarize_by_week(graded)
+    assert len(summary) == 2
+    postseason_row = summary[summary["season_type"] == "postseason"].iloc[0]
+    assert pd.isna(postseason_row["week"])  # None becomes NaN once week is a numeric DataFrame column
+    assert postseason_row["wins"] == 1
+
+
+def test_summarize_by_week_empty_when_nothing_decided():
+    graded = pd.DataFrame([{"year": 2025, "week": 3, "season_type": "regular", "outcome": None}])
+    summary = pick_log.summarize_by_week(graded)
+    assert summary.empty
+    assert list(summary.columns) == ["year", "week", "season_type", "n", "wins", "losses", "win_rate"]

@@ -1220,9 +1220,16 @@ with tab5:
                 },
             )
 
-            st.markdown("#### Win rate by week")
-            week_summary = backtest.summarize_by_week(graded).set_index("week")
-            st.bar_chart(week_summary["win_rate"], height=220, use_container_width=True)
+            st.markdown("#### Record by week")
+            week_summary = backtest.summarize_by_week(graded)
+            week_display = week_summary.assign(
+                Record=week_summary["wins"].astype(str) + "-" + (week_summary["n"] - week_summary["wins"]).astype(str),
+            )[["week", "Record", "win_rate"]].rename(columns={"week": "Week", "win_rate": "Win Rate"})
+            st.dataframe(
+                week_display, use_container_width=True, hide_index=True,
+                column_config={"Win Rate": st.column_config.ProgressColumn("Win Rate", min_value=0.0, max_value=1.0)},
+            )
+            st.bar_chart(week_summary.set_index("week")["win_rate"], height=220, use_container_width=True)
 
     st.markdown("---")
     st.markdown("## ✅ Verified Accuracy (Logged Picks)")
@@ -1246,9 +1253,29 @@ with tab5:
             lg2.metric("Win Rate", f"{log_acc['win_rate']:.1%}" if log_acc["win_rate"] is not None else "—")
             lg3.metric("Wins / Losses", f"{log_acc['wins']} / {log_acc['losses']}")
 
-        st.markdown("#### Logged slates")
-        weeks_df = pd.DataFrame(pick_log.logged_weeks(), columns=["Year", "Week", "Season Type"])
-        st.dataframe(weeks_df, use_container_width=True, hide_index=True)
+        st.markdown("#### Record by week")
+        st.caption("Every logged slate, win/loss record once results are in — 'Pending' means it's "
+                   "logged but the games haven't finished yet.")
+        week_record = pick_log.summarize_by_week(graded_log)
+        # Built from logged_df (not logged_weeks()'s list-of-tuples helper) so the merge
+        # key columns share the exact same dtypes as week_record's — both ultimately trace
+        # back to the same load_log() call, avoiding a None-vs-NaN dtype mismatch on the
+        # "week" column (None for postseason) that a fresh tuple-derived DataFrame risks.
+        all_slates = logged_df[["year", "week", "season_type"]].drop_duplicates().sort_values(
+            ["year", "week"], na_position="first"
+        )
+        weeks_display = all_slates.merge(week_record, on=["year", "week", "season_type"], how="left")
+        weeks_display["Record"] = weeks_display.apply(
+            lambda r: f"{int(r['wins'])}-{int(r['losses'])}" if pd.notna(r["wins"]) else "Pending", axis=1,
+        )
+        weeks_display = weeks_display.rename(
+            columns={"year": "Year", "week": "Week", "season_type": "Season Type", "win_rate": "Win Rate"}
+        )
+        st.dataframe(
+            weeks_display[["Year", "Week", "Season Type", "Record", "Win Rate"]],
+            use_container_width=True, hide_index=True,
+            column_config={"Win Rate": st.column_config.ProgressColumn("Win Rate", min_value=0.0, max_value=1.0)},
+        )
 
     st.markdown("#### Backup / restore log")
     st.caption("⚠️ This log lives on the app's local disk and is **not** committed to git — a "

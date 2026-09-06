@@ -131,3 +131,24 @@ def grade_logged_picks(bearer_token: str, log_file: Path = LOG_FILE) -> pd.DataF
     log_df = log_df.copy()
     log_df["outcome"] = outcomes
     return log_df
+
+
+def summarize_by_week(graded: pd.DataFrame) -> pd.DataFrame:
+    """
+    Win/loss record grouped by (year, week, season_type) — the log spans arbitrarily many
+    seasons over time (it's never cleared), unlike a single backtest_season() run, so
+    grouping by week number alone (like backtest.summarize_by_week) would wrongly combine
+    e.g. 2025 week 3 with 2026 week 3. Postseason rows have week=None; dropna=False keeps
+    them as their own group instead of pandas silently dropping them.
+    """
+    decided = graded[graded["outcome"].isin(["win", "loss"])]
+    if decided.empty:
+        return pd.DataFrame(columns=["year", "week", "season_type", "n", "wins", "losses", "win_rate"])
+
+    summary = decided.groupby(["year", "week", "season_type"], dropna=False).agg(
+        n=("outcome", "size"),
+        wins=("outcome", lambda s: (s == "win").sum()),
+    ).reset_index()
+    summary["losses"] = summary["n"] - summary["wins"]
+    summary["win_rate"] = summary["wins"] / summary["n"]
+    return summary.sort_values(["year", "week"], na_position="first").reset_index(drop=True)
