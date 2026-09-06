@@ -257,6 +257,18 @@ def tier_row_css(tier: str) -> str:
     return f"background-color: {color}22" if color and tier != "Pass" else ""
 
 
+# Win/loss is a different axis of meaning than tier confidence (a graded result, not a
+# pick's confidence), so it gets its own green/red rather than reusing TIER_COLORS —
+# they never appear in the same table, so there's no risk of the two meanings colliding.
+OUTCOME_COLORS = {"win": "#22c55e", "loss": "#ef4444"}
+
+
+def outcome_row_css(outcome: str) -> str:
+    """Full-row background tint for a graded pick's outcome (win/loss); push/pending get no tint."""
+    color = OUTCOME_COLORS.get(outcome, "")
+    return f"background-color: {color}22" if color else ""
+
+
 # ── session state ─────────────────────────────────────────────────────────────
 if "parlay_legs" not in st.session_state:
     st.session_state["parlay_legs"] = 3
@@ -1283,6 +1295,54 @@ with tab5:
             weeks_display[["Year", "Week", "Season Type", "Record", "Win Rate"]],
             use_container_width=True, hide_index=True,
             column_config={"Win Rate": st.column_config.ProgressColumn("Win Rate", min_value=0.0, max_value=1.0)},
+        )
+
+        st.markdown("#### Game-by-game results")
+        st.caption("Pick a logged slate to see exactly which games the model got right.")
+        slate_options = list(all_slates.itertuples(index=False, name=None))
+
+        def _format_slate(opt):
+            yr, wk, stype = opt
+            week_label = f"Week {int(wk)}" if pd.notna(wk) else "Postseason"
+            return f"{int(yr)} {week_label} ({stype.title()})"
+
+        selected_slate = st.selectbox(
+            "Slate", options=slate_options, format_func=_format_slate,
+            index=len(slate_options) - 1, key="game_results_slate",  # default to the most recently logged slate
+        )
+        sel_year, sel_week, sel_season_type = selected_slate
+        week_mask = graded_log["week"].isna() if pd.isna(sel_week) else graded_log["week"] == sel_week
+        slate_games = graded_log[
+            (graded_log["year"] == sel_year) & week_mask & (graded_log["season_type"] == sel_season_type)
+        ].sort_values("cover_prob", ascending=False).copy()
+
+        def _result_str(r):
+            if pd.isna(r["home_points"]):
+                return "—"
+            return f"{r['home_team']} {int(r['home_points'])}-{int(r['away_points'])} {r['away_team']}"
+
+        outcome_labels = {"win": "✅ Win", "loss": "❌ Loss", "push": "🟰 Push"}
+        slate_games["Home Logo"] = slate_games["home_team"].map(lambda t: logos.get(t, ""))
+        slate_games["Away Logo"] = slate_games["away_team"].map(lambda t: logos.get(t, ""))
+        slate_games["Result"] = slate_games.apply(_result_str, axis=1)
+        slate_games["Outcome"] = slate_games["outcome"].map(lambda o: outcome_labels.get(o, "⏳ Pending"))
+
+        game_display = slate_games.rename(columns={
+            "home_team": "Home", "away_team": "Away",
+            "market_spread_home": "Market Spread", "pick_team": "Pick", "tier": "Tier",
+        })[["Home Logo", "Home", "Away Logo", "Away", "Market Spread", "Pick", "Tier", "Result", "Outcome"]]
+
+        def _shade_outcome_row(row):
+            return [outcome_row_css(slate_games.loc[row.name, "outcome"])] * len(row)
+
+        st.dataframe(
+            game_display.style.apply(_shade_outcome_row, axis=1),
+            use_container_width=True, hide_index=True,
+            column_config={
+                "Home Logo": st.column_config.ImageColumn("", width="small"),
+                "Away Logo": st.column_config.ImageColumn("", width="small"),
+                "Market Spread": st.column_config.NumberColumn("Market Spread", format="%+.1f"),
+            },
         )
 
     st.markdown("#### Backup / restore log")

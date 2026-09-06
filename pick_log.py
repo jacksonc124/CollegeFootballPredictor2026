@@ -140,8 +140,10 @@ def restore_log(df: pd.DataFrame, log_dir: Path = LOG_DIR, log_file: Path = LOG_
 def grade_logged_picks(bearer_token: str, log_file: Path = LOG_FILE) -> pd.DataFrame:
     """
     Grade every logged pick against actual final scores, for weeks where results are
-    available yet. Returns the log with an added "outcome" column (win/loss/push/None —
-    None means the game hasn't been played, or a result couldn't be fetched).
+    available yet. Returns the log with added "outcome" (win/loss/push/None — None means
+    the game hasn't been played, or a result couldn't be fetched) and "home_points"/
+    "away_points" (the final score behind that outcome, None alongside a None outcome)
+    columns.
     """
     import backtest  # local import: backtest.py doesn't import this module, avoids a cycle
 
@@ -150,6 +152,8 @@ def grade_logged_picks(bearer_token: str, log_file: Path = LOG_FILE) -> pd.DataF
         return log_df
 
     outcomes = []
+    home_points_col = []
+    away_points_col = []
     results_cache: dict[tuple, dict] = {}
     for _, row in log_df.iterrows():
         key = (row["year"], row["week"], row["season_type"])
@@ -161,12 +165,18 @@ def grade_logged_picks(bearer_token: str, log_file: Path = LOG_FILE) -> pd.DataF
         result = results_cache[key].get((row["home_team"], row["away_team"]))
         if result is None:
             outcomes.append(None)
+            home_points_col.append(None)
+            away_points_col.append(None)
             continue
         home_points, away_points = result
+        home_points_col.append(home_points)
+        away_points_col.append(away_points)
         outcomes.append(backtest.grade_pick(row["pick_team"], row["home_team"], row["away_team"],
                                              row["market_spread_home"], home_points, away_points))
 
     log_df = log_df.copy()
+    log_df["home_points"] = home_points_col
+    log_df["away_points"] = away_points_col
     log_df["outcome"] = outcomes
     return log_df
 
