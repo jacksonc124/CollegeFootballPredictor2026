@@ -1,3 +1,5 @@
+import json
+
 import pandas as pd
 import pytest
 
@@ -82,6 +84,47 @@ def test_load_log_returns_logged_entries(log_paths):
     df = pick_log.load_log(log_file)
     assert len(df) == 1
     assert df.iloc[0]["pick_team"] == "Home U"
+
+
+def test_load_log_deduplicates_a_slate_logged_twice(log_paths):
+    # Simulates the race log_picks() guards against: the same slate written twice
+    # (e.g. two Streamlit sessions both auto-logging within the same instant), landing
+    # in the file as two batches with different logged_at timestamps.
+    log_dir, log_file = log_paths
+    log_dir.mkdir()
+    entry_early = {"logged_at": "2026-01-01T00:00:00+00:00", "year": 2026, "week": 1, "season_type": "regular",
+                   "home_team": "Home U", "away_team": "Away U", "market_spread_home": -3.0,
+                   "pick_team": "Home U", "model_pick": "HOME (Home U)", "cover_prob": 0.65,
+                   "edge_points": 4.0, "tier": "A"}
+    entry_late = {**entry_early, "logged_at": "2026-01-01T00:00:00.000500+00:00"}  # same slate+game, later
+    with log_file.open("w") as f:
+        f.write(json.dumps(entry_early) + "\n")
+        f.write(json.dumps(entry_late) + "\n")
+
+    df = pick_log.load_log(log_file)
+    assert len(df) == 1  # the duplicate collapses
+    assert df.iloc[0]["logged_at"] == "2026-01-01T00:00:00+00:00"  # earliest one wins
+
+
+def test_load_log_keeps_distinct_games_within_the_same_slate(log_paths):
+    log_dir, log_file = log_paths
+    pick_log.log_picks(make_picks_df(), 2025, 3, "regular", log_dir=log_dir, log_file=log_file)
+    df = pick_log.load_log(log_file)
+    assert len(df) == 1  # make_picks_df() has one real pick (the other is NO EDGE, not logged)
+
+
+def test_log_picks_blocked_by_a_stale_lock_file(log_paths):
+    # Simulates losing the race: another caller's lock is already present. This caller
+    # should back off (return False, write nothing) rather than fight over the file.
+    log_dir, log_file = log_paths
+    log_dir.mkdir()
+    (log_dir / ".lock_2025_3_regular").open("x").close()
+
+    written = pick_log.log_picks(make_picks_df(), 2025, 3, "regular", log_dir=log_dir, log_file=log_file)
+
+    assert written is False
+    assert not log_file.exists()
+    assert (log_dir / ".lock_2025_3_regular").exists()  # not this caller's lock to remove
 
 
 def test_logged_weeks_lists_distinct_slates_sorted(log_paths):

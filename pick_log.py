@@ -51,33 +51,71 @@ def log_picks(df: pd.DataFrame, year: int, week: int | None, season_type: str,
     False without writing anything if this (year, week, season_type) is already logged —
     intentionally not overwritable, since the whole point is capturing what was
     predictable *before* kickoff, not whatever a later, fresher re-fetch would say.
+
+    already_logged() below is a check, and this function's append is a separate act —
+    not atomic. Two callers racing within the same instant (observed in practice: two
+    Streamlit sessions/reruns both auto-logging the current week within half a
+    millisecond of each other) can both pass the check before either writes, producing
+    duplicate entries for the same slate. An exclusive-create lock file narrows that
+    race to almost nothing: 'x' mode atomically fails if another caller's lock already
+    exists, so at most one racer proceeds to write. It's cleaned up in `finally` so a
+    completed write doesn't block this slate from ever being logged again; a lock left
+    behind by a crash mid-write is the one case that would (see load_log()'s
+    deduplication for the actual safety net against any duplicate that still slips
+    through — this lock is a mitigation, not a guarantee).
     """
     if already_logged(year, week, season_type, log_file):
         return False
 
     log_dir.mkdir(exist_ok=True)
-    logged_at = pd.Timestamp.now(tz="UTC").isoformat()
-    picks = df[df["pick_team"] != ""]
+    lock_path = log_dir / f".lock_{year}_{week}_{season_type}"
+    try:
+        lock_path.open("x").close()
+    except FileExistsError:
+        return False
 
-    with log_file.open("a") as f:
-        for _, row in picks.iterrows():
-            entry = {
-                "logged_at": logged_at, "year": year, "week": week, "season_type": season_type,
-                "home_team": row["home_team"], "away_team": row["away_team"],
-                "market_spread_home": row["market_spread_home"], "pick_team": row["pick_team"],
-                "model_pick": row["model_pick"], "cover_prob": row["cover_prob"],
-                "edge_points": row["edge_points"], "tier": row["tier"],
-            }
-            f.write(json.dumps(entry) + "\n")
-    return True
+    try:
+        if already_logged(year, week, season_type, log_file):  # re-check inside the lock
+            return False
+
+        logged_at = pd.Timestamp.now(tz="UTC").isoformat()
+        picks = df[df["pick_team"] != ""]
+
+        with log_file.open("a") as f:
+            for _, row in picks.iterrows():
+                entry = {
+                    "logged_at": logged_at, "year": year, "week": week, "season_type": season_type,
+                    "home_team": row["home_team"], "away_team": row["away_team"],
+                    "market_spread_home": row["market_spread_home"], "pick_team": row["pick_team"],
+                    "model_pick": row["model_pick"], "cover_prob": row["cover_prob"],
+                    "edge_points": row["edge_points"], "tier": row["tier"],
+                }
+                f.write(json.dumps(entry) + "\n")
+        return True
+    finally:
+        lock_path.unlink(missing_ok=True)
 
 
 def load_log(log_file: Path = LOG_FILE) -> pd.DataFrame:
-    """Load the full pick log as a DataFrame (empty with LOG_COLUMNS if nothing logged yet)."""
+    """
+    Load the full pick log as a DataFrame (empty with LOG_COLUMNS if nothing logged yet).
+
+    Deduplicates by (year, week, season_type, home_team, away_team), keeping the earliest
+    logged_at. This is the actual safety net against log_picks()'s race (see its
+    docstring) — even if a duplicate write slips through, every consumer of this log
+    (accuracy counts, the CSV export, summarize_by_week) goes through load_log() or
+    grade_logged_picks() (which calls this), so a duplicate silently collapses here
+    instead of double-counting every game downstream.
+    """
     entries = _read_all_entries(log_file)
     if not entries:
         return pd.DataFrame(columns=LOG_COLUMNS)
-    return pd.DataFrame(entries)
+    df = pd.DataFrame(entries)
+    return (
+        df.sort_values("logged_at")
+        .drop_duplicates(subset=["year", "week", "season_type", "home_team", "away_team"], keep="first")
+        .reset_index(drop=True)
+    )
 
 
 def logged_weeks(log_file: Path = LOG_FILE) -> list[tuple]:
