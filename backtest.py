@@ -30,18 +30,35 @@ import model
 
 
 def get_actual_results(bearer_token: str, year: int, week: int | None, season_type: str = "regular",
-                        cache_dir=model.CACHE_DIR) -> dict:
+                        cache_dir=model.CACHE_DIR, cache_ttl_seconds: int = 3600) -> dict:
     """
     Return {(home_team, away_team): (home_points, away_points)} for completed games.
     week=None fetches all games for that season_type (used for postseason).
+
+    Unlike most of this app's disk caches (season-long ratings, team metadata — things
+    that don't change once fetched), which games have final scores actively changes over
+    the course of a week as more of them finish. A cache with no expiry freezes at
+    whatever was final the moment it was first written and silently hides every game that
+    finishes afterward — observed in practice as "the last few games never show up" days
+    after they'd actually ended. cache_ttl_seconds bounds how long a cached page of
+    results is trusted before refetching (matches the season backtest's Streamlit-level
+    ttl=21600, but that layer sits ON TOP of this disk cache and can't fix staleness here
+    by itself — this is the actual bottleneck).
     """
+    import time
+
     import cfbd
 
     wk_str = "all" if week is None else str(week)
     cache_file = model.cache_path(f"results_{year}_{season_type}_wk{wk_str}.json", cache_dir=cache_dir)
     if cache_file.exists():
-        raw = json.loads(cache_file.read_text())
-        return {tuple(k.split("||")): tuple(v) for k, v in raw.items()}
+        cached = json.loads(cache_file.read_text())
+        # Old cache files (written before this TTL existed) are a flat {matchup: [pts]}
+        # dict with no "fetched_at" — treat those as already-expired rather than trusting
+        # them forever, so this fix also heals caches that are already stale right now.
+        if isinstance(cached, dict) and "fetched_at" in cached and "results" in cached:
+            if time.time() - cached["fetched_at"] < cache_ttl_seconds:
+                return {tuple(k.split("||")): tuple(v) for k, v in cached["results"].items()}
 
     with model.make_client(bearer_token) as client:
         kwargs = dict(year=year, season_type=season_type)
@@ -56,7 +73,7 @@ def get_actual_results(bearer_token: str, year: int, week: int | None, season_ty
         results[(g.home_team, g.away_team)] = (g.home_points, g.away_points)
 
     serializable = {f"{h}||{a}": [hp, ap] for (h, a), (hp, ap) in results.items()}
-    cache_file.write_text(json.dumps(serializable))
+    cache_file.write_text(json.dumps({"fetched_at": time.time(), "results": serializable}))
     return results
 
 

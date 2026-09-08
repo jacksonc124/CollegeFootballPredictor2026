@@ -1,6 +1,23 @@
+import json
+import time
+
 import pandas as pd
 
-from backtest import grade_pick, overall_accuracy, summarize_by_tier, summarize_by_week
+from backtest import get_actual_results, grade_pick, overall_accuracy, summarize_by_tier, summarize_by_week
+
+
+def test_get_actual_results_uses_fresh_cache_without_a_network_call(tmp_path):
+    # A fresh cache hit returns before ever touching cfbd/the bearer token, so this needs
+    # no real network access or credentials to verify.
+    cache_file = tmp_path / "results_2025_regular_wk3.json"
+    cache_file.write_text(json.dumps({
+        "fetched_at": time.time(),
+        "results": {"Home U||Away U": [27, 24]},
+    }))
+
+    result = get_actual_results("fake-token", 2025, 3, "regular", cache_dir=tmp_path)
+
+    assert result == {("Home U", "Away U"): (27, 24)}
 
 
 def test_grade_pick_home_win_covers():
