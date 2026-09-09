@@ -1,4 +1,6 @@
+import json
 import math
+import time
 from datetime import date, timezone
 from zoneinfo import ZoneInfo
 
@@ -22,6 +24,48 @@ def test_classify_tier_boundaries():
     assert model.classify_tier(0.52) == "C"
     assert model.classify_tier(0.51) == "Pass"
     assert model.classify_tier(0.599) == "B"
+
+
+def test_read_write_cache_roundtrip(tmp_path):
+    cache_file = tmp_path / "test.json"
+    model._write_cache(cache_file, {"a": 1})
+    assert model._read_cache(cache_file, ttl_seconds=3600) == {"a": 1}
+
+
+def test_read_cache_misses_once_ttl_has_passed(tmp_path):
+    cache_file = tmp_path / "test.json"
+    model._write_cache(cache_file, {"a": 1})
+    # Backdate fetched_at to simulate the ttl having elapsed, rather than sleeping.
+    cached = json.loads(cache_file.read_text())
+    cached["fetched_at"] = time.time() - 10000
+    cache_file.write_text(json.dumps(cached))
+
+    assert model._read_cache(cache_file, ttl_seconds=3600) is None
+
+
+def test_read_cache_treats_pre_fix_flat_format_as_a_miss(tmp_path):
+    # Cache files written before this helper existed are a bare JSON value with no
+    # fetched_at/value wrapper — the exact shape that caused two real "stuck forever"
+    # bugs (frozen game results, a permanently-missing newly-scheduled game). These must
+    # never be trusted as fresh, so an already-stale cache self-heals on the next call.
+    cache_file = tmp_path / "test.json"
+    cache_file.write_text(json.dumps({"a": 1}))
+
+    assert model._read_cache(cache_file, ttl_seconds=3600) is None
+
+
+def test_read_cache_missing_file_is_a_miss(tmp_path):
+    assert model._read_cache(tmp_path / "does_not_exist.json", ttl_seconds=3600) is None
+
+
+def test_read_cache_with_none_ttl_never_expires(tmp_path):
+    cache_file = tmp_path / "test.json"
+    model._write_cache(cache_file, [1, 2, 3])
+    cached = json.loads(cache_file.read_text())
+    cached["fetched_at"] = time.time() - 10_000_000  # absurdly old
+    cache_file.write_text(json.dumps(cached))
+
+    assert model._read_cache(cache_file, ttl_seconds=None) == [1, 2, 3]
 
 
 def test_pick_line_prefers_provider():

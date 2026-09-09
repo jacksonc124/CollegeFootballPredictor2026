@@ -11,6 +11,7 @@ imported and unit-tested without the CFBD SDK installed.
 
 import json
 import math
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -39,6 +40,31 @@ def cache_path(*parts, cache_dir: Path = CACHE_DIR) -> Path:
     return cache_dir.joinpath(*parts)
 
 
+def _read_cache(cache_file: Path, ttl_seconds: float | None):
+    """
+    Return the cached value if cache_file exists and (ttl_seconds is None, or it's not
+    older than that) — else None (a cache miss). A cache with no expiry at all was the
+    actual cause of two separate real bugs this app hit (game results frozen mid-week,
+    a newly-scheduled game's line permanently missing) — once written, it was trusted
+    forever, silently hiding anything that changed afterward. Cache files written before
+    this helper existed are a bare JSON value with no "fetched_at" wrapper; those are
+    always treated as a miss rather than trusted forever, so an already-stale cache
+    self-heals on the next call instead of needing manual deletion.
+    """
+    if not cache_file.exists():
+        return None
+    cached = json.loads(cache_file.read_text())
+    if not (isinstance(cached, dict) and "fetched_at" in cached and "value" in cached):
+        return None
+    if ttl_seconds is not None and time.time() - cached["fetched_at"] >= ttl_seconds:
+        return None
+    return cached["value"]
+
+
+def _write_cache(cache_file: Path, value) -> None:
+    cache_file.write_text(json.dumps({"fetched_at": time.time(), "value": value}))
+
+
 def make_client(bearer_token: str):
     import cfbd
 
@@ -49,13 +75,15 @@ def make_client(bearer_token: str):
 
 # ---------- CFBD fetchers (with JSON caching) ----------
 
-def get_sp_ratings(bearer_token: str, year: int, cache_dir: Path = CACHE_DIR) -> dict:
+def get_sp_ratings(bearer_token: str, year: int, cache_dir: Path = CACHE_DIR,
+                    cache_ttl_seconds: float = 3600) -> dict:
     """Pull SP+ ratings from CFBD RatingsApi. Returns {team_name: sp_rating}."""
     import cfbd
 
     cache_file = cache_path(f"sp_{year}.json", cache_dir=cache_dir)
-    if cache_file.exists():
-        return json.loads(cache_file.read_text())
+    cached = _read_cache(cache_file, cache_ttl_seconds)
+    if cached is not None:
+        return cached
 
     ratings: dict[str, float] = {}
     with make_client(bearer_token) as client:
@@ -64,7 +92,7 @@ def get_sp_ratings(bearer_token: str, year: int, cache_dir: Path = CACHE_DIR) ->
             if v is not None:
                 ratings[t.team] = float(v)
 
-    cache_file.write_text(json.dumps(ratings))
+    _write_cache(cache_file, ratings)
     return ratings
 
 
@@ -75,20 +103,25 @@ LINES_CACHE_VERSION = 2
 
 
 def get_weekly_lines(bearer_token: str, year: int, week: int | None, season_type: str,
-                      cache_dir: Path = CACHE_DIR) -> list[dict]:
+                      cache_dir: Path = CACHE_DIR, cache_ttl_seconds: float = 3600) -> list[dict]:
     """
     Pull betting lines for a year/week/season_type. week=None fetches all games
     for that season_type (used for postseason). Returns a list of plain dicts:
       {"home_team": str, "away_team": str, "lines": [{"provider": str, "spread": float | None,
        "over_under": float | None, "home_moneyline": float | None, "away_moneyline": float | None}, ...]}
+
+    Refetches after cache_ttl_seconds — a newly-scheduled game (or a game whose line
+    wasn't posted yet) can otherwise vanish from the app permanently once the first fetch
+    of a week is cached, since new games/lines keep appearing throughout the week.
     """
     import cfbd
 
     wk_str = "all" if week is None else str(week)
     cache_file = cache_path(f"lines_v{LINES_CACHE_VERSION}_{year}_{season_type}_wk{wk_str}.json",
                              cache_dir=cache_dir)
-    if cache_file.exists():
-        return json.loads(cache_file.read_text())
+    cached = _read_cache(cache_file, cache_ttl_seconds)
+    if cached is not None:
+        return cached
 
     with make_client(bearer_token) as client:
         kwargs = dict(year=year, season_type=season_type)
@@ -113,7 +146,7 @@ def get_weekly_lines(bearer_token: str, year: int, week: int | None, season_type
         }
         for g in games
     ]
-    cache_file.write_text(json.dumps(result))
+    _write_cache(cache_file, result)
     return result
 
 
@@ -124,7 +157,7 @@ GAME_INFO_CACHE_VERSION = 2
 
 
 def get_game_info(bearer_token: str, year: int, week: int | None, season_type: str,
-                   cache_dir: Path = CACHE_DIR) -> dict:
+                   cache_dir: Path = CACHE_DIR, cache_ttl_seconds: float = 3600) -> dict:
     """
     Pull scheduling metadata (neutral site, round/bowl name, kickoff date, venue) for
     FBS games from the Games API.
@@ -137,15 +170,19 @@ def get_game_info(bearer_token: str, year: int, week: int | None, season_type: s
     (neutral_site=False), so the home team should still get home-field advantage there.
     Returns {(home_team, away_team): {"neutral_site": bool, "notes": str,
     "start_date": str | None (ISO 8601, UTC), "start_time_tbd": bool, "venue": str}}.
+
+    Refetches after cache_ttl_seconds — a newly-scheduled game, or one whose kickoff time
+    was still TBD, needs to actually pick up the update instead of freezing at the first
+    fetch.
     """
     import cfbd
 
     wk_str = "all" if week is None else str(week)
     cache_file = cache_path(f"games_v{GAME_INFO_CACHE_VERSION}_{year}_{season_type}_wk{wk_str}.json",
                              cache_dir=cache_dir)
-    if cache_file.exists():
-        raw = json.loads(cache_file.read_text())
-        return {tuple(k.split("||", 1)): v for k, v in raw.items()}
+    cached = _read_cache(cache_file, cache_ttl_seconds)
+    if cached is not None:
+        return {tuple(k.split("||", 1)): v for k, v in cached.items()}
 
     with make_client(bearer_token) as client:
         kwargs = dict(year=year, season_type=season_type, classification="fbs")
@@ -165,12 +202,12 @@ def get_game_info(bearer_token: str, year: int, week: int | None, season_type: s
     }
 
     serializable = {f"{h}||{a}": v for (h, a), v in info.items()}
-    cache_file.write_text(json.dumps(serializable))
+    _write_cache(cache_file, serializable)
     return info
 
 
 def get_team_scoring_stats(bearer_token: str, year: int, season_type: str = "regular",
-                            cache_dir: Path = CACHE_DIR) -> dict:
+                            cache_dir: Path = CACHE_DIR, cache_ttl_seconds: float = 3600) -> dict:
     """
     Season-to-date scoring averages per FBS team, computed from every completed game
     of the season in one call. Returns
@@ -178,13 +215,15 @@ def get_team_scoring_stats(bearer_token: str, year: int, season_type: str = "reg
 
     This is a season-long snapshot (like SP+), not point-in-time — see the
     look-ahead-bias caveat in backtest.py's module docstring if using this for backtesting.
-    Feeds the simple totals (over/under) model — see predict_total().
+    Feeds the simple totals (over/under) model — see predict_total(). Refetches after
+    cache_ttl_seconds since every newly-completed game changes these averages.
     """
     import cfbd
 
     cache_file = cache_path(f"scoring_{year}_{season_type}.json", cache_dir=cache_dir)
-    if cache_file.exists():
-        return json.loads(cache_file.read_text())
+    cached = _read_cache(cache_file, cache_ttl_seconds)
+    if cached is not None:
+        return cached
 
     with make_client(bearer_token) as client:
         games = cfbd.GamesApi(client).get_games(year=year, season_type=season_type, classification="fbs")
@@ -212,7 +251,7 @@ def get_team_scoring_stats(bearer_token: str, year: int, season_type: str = "reg
         for team, t in totals.items()
     }
 
-    cache_file.write_text(json.dumps(stats))
+    _write_cache(cache_file, stats)
     return stats
 
 
@@ -289,18 +328,20 @@ def get_team_conferences(bearer_token: str, year: int, cache_dir: Path = CACHE_D
 
 
 def get_player_season_stats(bearer_token: str, year: int, category: str, season_type: str = "regular",
-                             cache_dir: Path = CACHE_DIR) -> list[dict]:
+                             cache_dir: Path = CACHE_DIR, cache_ttl_seconds: float = 3600) -> list[dict]:
     """
     Pull aggregated player season stats for one category (e.g. "passing", "rushing",
     "receiving"). CFBD returns "long" format — one row per player per stat type — so this
     is a thin passthrough; build_stat_leaderboard() does the aggregation. stat is kept as
-    the raw string CFBD returns; parse it at use time.
+    the raw string CFBD returns; parse it at use time. Refetches after cache_ttl_seconds
+    since these accumulate with every game played.
     """
     import cfbd
 
     cache_file = cache_path(f"player_stats_{year}_{season_type}_{category}.json", cache_dir=cache_dir)
-    if cache_file.exists():
-        return json.loads(cache_file.read_text())
+    cached = _read_cache(cache_file, cache_ttl_seconds)
+    if cached is not None:
+        return cached
 
     with make_client(bearer_token) as client:
         rows = cfbd.StatsApi(client).get_player_season_stats(year=year, season_type=season_type, category=category)
@@ -309,24 +350,26 @@ def get_player_season_stats(bearer_token: str, year: int, category: str, season_
         {"player": r.player, "team": r.team, "position": r.position, "stat_type": r.stat_type, "stat": r.stat}
         for r in rows
     ]
-    cache_file.write_text(json.dumps(result))
+    _write_cache(cache_file, result)
     return result
 
 
 def get_game_weather(bearer_token: str, year: int, week: int | None, season_type: str,
-                      cache_dir: Path = CACHE_DIR) -> dict:
+                      cache_dir: Path = CACHE_DIR, cache_ttl_seconds: float = 3600) -> dict:
     """
     Pull weather conditions per game (requires a CFBD tier with weather access). Returns
     {(home_team, away_team): {"game_indoors": bool, "wind_speed": float | None,
     "precipitation": float | None, "snowfall": float | None, "temperature": float | None}}.
+    Refetches after cache_ttl_seconds — a forecast for an upcoming game changes as
+    kickoff approaches, and a newly-scheduled game needs to show up at all.
     """
     import cfbd
 
     wk_str = "all" if week is None else str(week)
     cache_file = cache_path(f"weather_{year}_{season_type}_wk{wk_str}.json", cache_dir=cache_dir)
-    if cache_file.exists():
-        raw = json.loads(cache_file.read_text())
-        return {tuple(k.split("||", 1)): v for k, v in raw.items()}
+    cached = _read_cache(cache_file, cache_ttl_seconds)
+    if cached is not None:
+        return {tuple(k.split("||", 1)): v for k, v in cached.items()}
 
     with make_client(bearer_token) as client:
         kwargs = dict(year=year, season_type=season_type, classification="fbs")
@@ -345,30 +388,33 @@ def get_game_weather(bearer_token: str, year: int, week: int | None, season_type
         for g in games
     }
     serializable = {f"{h}||{a}": v for (h, a), v in result.items()}
-    cache_file.write_text(json.dumps(serializable))
+    _write_cache(cache_file, serializable)
     return result
 
 
-def get_adjusted_team_metrics(bearer_token: str, year: int, cache_dir: Path = CACHE_DIR) -> dict:
+def get_adjusted_team_metrics(bearer_token: str, year: int, cache_dir: Path = CACHE_DIR,
+                               cache_ttl_seconds: float = 21600) -> dict:
     """
     Pull CFBD's opponent-adjusted team efficiency (EPA/play, offense and allowed defense)
     for the season — requires a CFBD tier with adjustedMetrics access. These values are NOT
     zero-centered in practice (empirically ~+0.155 for both, in 2025 data) — see
     league_average_adjusted_metrics() and adjusted_total_delta() for why callers need the
     real league average as a baseline, not zero. Returns
-    {team: {"offense_epa": float, "defense_epa_allowed": float}}.
+    {team: {"offense_epa": float, "defense_epa_allowed": float}}. Refetches after
+    cache_ttl_seconds (default 6h, matching how slowly these season-to-date numbers move).
     """
     import cfbd
 
     cache_file = cache_path(f"adj_metrics_{year}.json", cache_dir=cache_dir)
-    if cache_file.exists():
-        return json.loads(cache_file.read_text())
+    cached = _read_cache(cache_file, cache_ttl_seconds)
+    if cached is not None:
+        return cached
 
     with make_client(bearer_token) as client:
         rows = cfbd.AdjustedMetricsApi(client).get_adjusted_team_season_stats(year=year)
 
     result = {r.team: {"offense_epa": r.epa.total, "defense_epa_allowed": r.epa_allowed.total} for r in rows}
-    cache_file.write_text(json.dumps(result))
+    _write_cache(cache_file, result)
     return result
 
 
@@ -466,18 +512,21 @@ def is_game_on_date(iso_start_date: str | None, target_date: date, tz) -> bool:
     return game_date == target_date
 
 
-def get_team_ats_records(bearer_token: str, year: int, cache_dir: Path = CACHE_DIR) -> dict:
+def get_team_ats_records(bearer_token: str, year: int, cache_dir: Path = CACHE_DIR,
+                          cache_ttl_seconds: float = 21600) -> dict:
     """
     Pull real historical against-the-spread records per team for the season — this is
     actual bet-grading data (CFBD grades every game against its own closing lines), not a
     model output. Returns {team: {"games": int, "ats_wins": int, "ats_losses": int,
-    "ats_pushes": int, "avg_cover_margin": float | None}}.
+    "ats_pushes": int, "avg_cover_margin": float | None}}. Refetches after
+    cache_ttl_seconds (default 6h) since every completed game updates these records.
     """
     import cfbd
 
     cache_file = cache_path(f"team_ats_{year}.json", cache_dir=cache_dir)
-    if cache_file.exists():
-        return json.loads(cache_file.read_text())
+    cached = _read_cache(cache_file, cache_ttl_seconds)
+    if cached is not None:
+        return cached
 
     with make_client(bearer_token) as client:
         rows = cfbd.TeamsApi(client).get_teams_ats(year=year)
@@ -489,7 +538,7 @@ def get_team_ats_records(bearer_token: str, year: int, cache_dir: Path = CACHE_D
         }
         for r in rows
     }
-    cache_file.write_text(json.dumps(result))
+    _write_cache(cache_file, result)
     return result
 
 
@@ -509,18 +558,21 @@ RANKING_POLLS = ("AP Top 25", "Coaches Poll")
 
 
 def get_rankings(bearer_token: str, year: int, week: int | None, season_type: str,
-                  cache_dir: Path = CACHE_DIR) -> dict:
+                  cache_dir: Path = CACHE_DIR, cache_ttl_seconds: float = 3600) -> dict:
     """
     Pull AP Top 25 and Coaches Poll rankings for a week. Returns
     {"AP Top 25": {team_name: rank}, "Coaches Poll": {team_name: rank}} — teams absent
-    from a poll (i.e. unranked) simply aren't keys in that poll's dict.
+    from a poll (i.e. unranked) simply aren't keys in that poll's dict. Refetches after
+    cache_ttl_seconds — a given week's poll isn't published until partway through it, so
+    fetching before then and caching forever would permanently show "not ranked yet".
     """
     import cfbd
 
     wk_str = "all" if week is None else str(week)
     cache_file = cache_path(f"rankings_{year}_{season_type}_wk{wk_str}.json", cache_dir=cache_dir)
-    if cache_file.exists():
-        return json.loads(cache_file.read_text())
+    cached = _read_cache(cache_file, cache_ttl_seconds)
+    if cached is not None:
+        return cached
 
     with make_client(bearer_token) as client:
         kwargs = dict(year=year, season_type=season_type)
@@ -535,7 +587,7 @@ def get_rankings(bearer_token: str, year: int, week: int | None, season_type: st
                 for r in poll.ranks:
                     result[poll.poll][r.school] = r.rank
 
-    cache_file.write_text(json.dumps(result))
+    _write_cache(cache_file, result)
     return result
 
 
