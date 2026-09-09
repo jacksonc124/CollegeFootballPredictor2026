@@ -1350,36 +1350,13 @@ with tab5:
                "calibration check above, this has no look-ahead bias. It's the real record, but it "
                "only covers whatever's been logged via the 📌 Log Picks button on the Pick'em tab.")
 
-    # The log itself lives on the app's local disk (see the backup/restore caption below) and
-    # a reboot wipes it — this has actually happened. A manually-entered prior record can't be
-    # lost the same way: it's saved in the page's URL (like Favorite Team), which survives a
-    # reboot even though the log doesn't. It's a totals-only adjustment, not fabricated games,
-    # so it deliberately doesn't touch Record by week or Game-by-game results below.
-    with st.expander("➕ Include a manually-entered prior record"):
-        st.caption("If a reboot or redeploy wiped logged picks before you backed them up, enter "
-                   "what you remember here — it's added to the totals below. There's no per-game "
-                   "detail behind it, so it won't show up in Record by week or Game-by-game results.")
-        pc1, pc2 = st.columns(2)
-        with pc1:
-            prior_wins = st.number_input("Prior Wins", min_value=0, step=1,
-                                          value=int(st.query_params.get("prior_wins", 0)))
-        with pc2:
-            prior_losses = st.number_input("Prior Losses", min_value=0, step=1,
-                                            value=int(st.query_params.get("prior_losses", 0)))
-        if prior_wins:
-            st.query_params["prior_wins"] = str(prior_wins)
-        else:
-            st.query_params.pop("prior_wins", None)
-        if prior_losses:
-            st.query_params["prior_losses"] = str(prior_losses)
-        else:
-            st.query_params.pop("prior_losses", None)
-
     logged_df = pick_log.load_log()
+    manual_records = pick_log.load_manual_records()
     if logged_df.empty:
         graded_log = logged_df
         log_acc = {"n": 0, "wins": 0, "losses": 0, "win_rate": None}
         week_record = pick_log.summarize_by_week(graded_log)
+        all_slates = pd.DataFrame(columns=["year", "week", "season_type"])
     else:
         with st.spinner("Grading logged picks against final scores…"):
             graded_log = pick_log.grade_logged_picks(bearer_token)
@@ -1390,41 +1367,62 @@ with tab5:
         # (instead of leaving people to infer it from "92 seems like a lot") makes that
         # explicit instead of reading like a possible bug.
         week_record = pick_log.summarize_by_week(graded_log)
+        all_slates = logged_df[["year", "week", "season_type"]].drop_duplicates().sort_values(
+            ["year", "week"], na_position="first"
+        )
 
-    total_wins = log_acc["wins"] + prior_wins
-    total_losses = log_acc["losses"] + prior_losses
+    manual_wins = int(manual_records["wins"].sum()) if not manual_records.empty else 0
+    manual_losses = int(manual_records["losses"].sum()) if not manual_records.empty else 0
+    total_wins = log_acc["wins"] + manual_wins
+    total_losses = log_acc["losses"] + manual_losses
     total_n = total_wins + total_losses
+    total_slates = len(week_record) + len(manual_records)
 
     if total_n == 0:
-        st.info("No picks logged yet, and no prior record entered above. Use the 📌 Log Picks "
+        st.info("No picks logged yet, and no remembered record entered below. Use the 📌 Log Picks "
                 "button on the Pick'em tab each week to start building a real track record.")
     else:
         lg1, lg2, lg3, lg4 = st.columns(4)
         lg1.metric("Logged Picks Graded", total_n)
         lg2.metric("Win Rate", f"{total_wins / total_n:.1%}")
         lg3.metric("Wins / Losses", f"{total_wins} / {total_losses}")
-        lg4.metric("Slates Logged", len(week_record))
-        carryover_note = (f" (includes a manually-entered {prior_wins}-{prior_losses} prior record)"
-                           if prior_wins or prior_losses else "")
-        st.caption(f"Cumulative across {len(week_record)} logged slate(s){carryover_note} — see "
-                   f"Record by week below for the per-slate breakdown.")
+        lg4.metric("Slates Logged", total_slates)
+        note = f" (including {len(manual_records)} manually-recorded slate(s))" if not manual_records.empty else ""
+        st.caption(f"Cumulative across {total_slates} logged slate(s){note} — see Record by week below "
+                   f"for the per-slate breakdown.")
 
-    if not logged_df.empty:
+    if total_n > 0 or not manual_records.empty:
         st.markdown("#### Record by week")
         st.caption("Every logged slate, win/loss record once results are in — 'Pending' means it's "
-                   "logged but the games haven't finished yet.")
+                   "logged but the games haven't finished yet. A row with no real games behind it "
+                   "(marked below) came from a manually-entered record instead.")
         # Built from logged_df (not logged_weeks()'s list-of-tuples helper) so the merge
         # key columns share the exact same dtypes as week_record's — both ultimately trace
         # back to the same load_log() call, avoiding a None-vs-NaN dtype mismatch on the
         # "week" column (None for postseason) that a fresh tuple-derived DataFrame risks.
-        all_slates = logged_df[["year", "week", "season_type"]].drop_duplicates().sort_values(
-            ["year", "week"], na_position="first"
-        )
         weeks_display = all_slates.merge(week_record, on=["year", "week", "season_type"], how="left")
-        weeks_display["Record"] = weeks_display.apply(
-            lambda r: f"{int(r['wins'])}-{int(r['losses'])}" if pd.notna(r["wins"]) else "Pending", axis=1,
-        )
-        weeks_display = weeks_display.rename(
+        if not weeks_display.empty:
+            # .apply(axis=1) on an empty DataFrame returns the frame unchanged (not a
+            # Series), which breaks the assignment below — happens here whenever there are
+            # no real logged slates yet and this section is only showing manual records.
+            weeks_display["Record"] = weeks_display.apply(
+                lambda r: f"{int(r['wins'])}-{int(r['losses'])}" if pd.notna(r["wins"]) else "Pending", axis=1,
+            )
+        # Slates with only a remembered total, no real per-game rows at all — these are
+        # never merged into a real slate's numbers (that would double-count if the real
+        # log ever catches up), they're additional rows of their own.
+        manual_only_rows = pd.DataFrame()
+        if not manual_records.empty:
+            existing_keys = set(zip(all_slates["year"], all_slates["week"], all_slates["season_type"]))
+            manual_only_rows = manual_records[
+                ~manual_records.apply(lambda r: (r["year"], r["week"], r["season_type"]) in existing_keys, axis=1)
+            ].copy()
+            manual_only_rows["Record"] = (
+                manual_only_rows["wins"].astype(str) + "-" + manual_only_rows["losses"].astype(str) + " *"
+            )
+            manual_only_rows["win_rate"] = manual_only_rows["wins"] / (manual_only_rows["wins"] + manual_only_rows["losses"])
+            weeks_display = pd.concat([weeks_display, manual_only_rows], ignore_index=True)
+        weeks_display = weeks_display.sort_values(["year", "week"], na_position="first").rename(
             columns={"year": "Year", "week": "Week", "season_type": "Season Type", "win_rate": "Win Rate"}
         )
         st.dataframe(
@@ -1432,7 +1430,49 @@ with tab5:
             use_container_width=True, hide_index=True,
             column_config={"Win Rate": st.column_config.ProgressColumn("Win Rate", min_value=0.0, max_value=1.0)},
         )
+        if not manual_only_rows.empty:
+            st.caption("\\* Manually recorded — no per-game detail, so it won't appear in Game-by-game results.")
 
+    with st.expander("➕ Record a remembered result for a slate with no per-game detail"):
+        st.caption("For a slate whose logged picks were lost (e.g. to a disk reset) before anyone "
+                   "backed them up. This is saved on the server alongside the log itself, so — "
+                   "unlike Favorite Team above — everyone visiting the app sees it too. It carries "
+                   "the same reboot risk as the log, for the same reason: there's nowhere else to "
+                   "put it without adding real external storage.")
+        mc1, mc2, mc3, mc4, mc5 = st.columns([1, 1, 1, 1, 1])
+        with mc1:
+            manual_year = st.number_input("Year", min_value=2000, max_value=2030, value=year, key="manual_record_year")
+        with mc2:
+            manual_postseason = st.checkbox("Postseason", key="manual_record_postseason")
+        with mc3:
+            manual_week = st.number_input("Week", min_value=1, max_value=15, value=1,
+                                           disabled=manual_postseason, key="manual_record_week")
+        with mc4:
+            manual_wins_in = st.number_input("Wins", min_value=0, step=1, key="manual_record_wins")
+        with mc5:
+            manual_losses_in = st.number_input("Losses", min_value=0, step=1, key="manual_record_losses")
+        manual_season_type = "postseason" if manual_postseason else "regular"
+        manual_week_val = None if manual_postseason else int(manual_week)
+        save_col, del_col = st.columns(2)
+        with save_col:
+            if st.button("Save remembered record", key="save_manual_record"):
+                pick_log.add_manual_record(int(manual_year), manual_week_val, manual_season_type,
+                                            int(manual_wins_in), int(manual_losses_in))
+                st.success(f"Saved {manual_wins_in}-{manual_losses_in} for {int(manual_year)} "
+                           f"{'Postseason' if manual_postseason else f'Week {manual_week}'}.")
+                st.rerun()
+        with del_col:
+            if st.button("Remove this slate's remembered record", key="delete_manual_record"):
+                pick_log.delete_manual_record(int(manual_year), manual_week_val, manual_season_type)
+                st.rerun()
+        if not manual_records.empty:
+            st.caption("Currently recorded: " + ", ".join(
+                f"{int(r.year)} {'Postseason' if pd.isna(r.week) else f'Week {int(r.week)}'} ({r.season_type}): "
+                f"{int(r.wins)}-{int(r.losses)}"
+                for r in manual_records.itertuples()
+            ))
+
+    if not logged_df.empty:
         st.markdown("#### Game-by-game results")
         st.caption("Pick a logged slate to see exactly which games the model got right.")
         slate_options = list(all_slates.itertuples(index=False, name=None))

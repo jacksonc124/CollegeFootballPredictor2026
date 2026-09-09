@@ -18,6 +18,7 @@ import pandas as pd
 
 LOG_DIR = Path("pick_log")
 LOG_FILE = LOG_DIR / "logged_picks.jsonl"
+MANUAL_RECORDS_FILE = LOG_DIR / "manual_records.jsonl"
 
 LOG_COLUMNS = [
     "logged_at", "year", "week", "season_type", "home_team", "away_team",
@@ -200,3 +201,54 @@ def summarize_by_week(graded: pd.DataFrame) -> pd.DataFrame:
     summary["losses"] = summary["n"] - summary["wins"]
     summary["win_rate"] = summary["wins"] / summary["n"]
     return summary.sort_values(["year", "week"], na_position="first").reset_index(drop=True)
+
+
+def add_manual_record(year: int, week: int | None, season_type: str, wins: int, losses: int,
+                       log_dir: Path = LOG_DIR, manual_file: Path = MANUAL_RECORDS_FILE) -> None:
+    """
+    Record a remembered win/loss total for a slate with no per-game detail behind it — e.g.
+    a week whose logged picks were lost to a disk reset before anyone backed them up.
+    Stored in a separate file from the real per-game log (never mixed into load_log()'s
+    rows), so it can never be mistaken for an actual graded pick and so Game-by-game
+    results — which needs real per-game rows to show anything — doesn't try to render it.
+    Lives on the same shared server-side disk as the log itself (not per-browser, unlike
+    Favorite Team's URL storage), so every visitor sees the same corrected record — and
+    carries the same reboot risk as the log, which is the whole reason this exists.
+
+    Overwrites any existing manual entry for the same (year, week, season_type) — this is
+    meant to be a single correction per slate, not an appendable history.
+    """
+    log_dir.mkdir(exist_ok=True)
+    records = [
+        r for r in _read_all_entries(manual_file)
+        if not (r["year"] == year and r["week"] == week and r["season_type"] == season_type)
+    ]
+    records.append({"year": year, "week": week, "season_type": season_type, "wins": wins, "losses": losses})
+    with manual_file.open("w") as f:
+        for r in records:
+            f.write(json.dumps(r) + "\n")
+
+
+def load_manual_records(manual_file: Path = MANUAL_RECORDS_FILE) -> pd.DataFrame:
+    """Load manually-recorded slate totals (see add_manual_record). Empty DataFrame with
+    columns [year, week, season_type, wins, losses] if none have been entered yet."""
+    entries = _read_all_entries(manual_file)
+    if not entries:
+        return pd.DataFrame(columns=["year", "week", "season_type", "wins", "losses"])
+    return pd.DataFrame(entries)
+
+
+def delete_manual_record(year: int, week: int | None, season_type: str,
+                          manual_file: Path = MANUAL_RECORDS_FILE) -> None:
+    """Remove a manually-recorded slate (e.g. once the real log has genuinely caught up to
+    it, or it was entered by mistake). A true no-op (no write at all) if the file doesn't
+    exist yet or no entry matches — nothing has ever been recorded to delete."""
+    if not manual_file.exists():
+        return
+    records = [
+        r for r in _read_all_entries(manual_file)
+        if not (r["year"] == year and r["week"] == week and r["season_type"] == season_type)
+    ]
+    with manual_file.open("w") as f:
+        for r in records:
+            f.write(json.dumps(r) + "\n")

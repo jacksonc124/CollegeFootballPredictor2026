@@ -206,3 +206,68 @@ def test_summarize_by_week_empty_when_nothing_decided():
     summary = pick_log.summarize_by_week(graded)
     assert summary.empty
     assert list(summary.columns) == ["year", "week", "season_type", "n", "wins", "losses", "win_rate"]
+
+
+def test_load_manual_records_empty_returns_dataframe_with_expected_columns(log_paths):
+    log_dir, _ = log_paths
+    df = pick_log.load_manual_records(log_dir / "manual_records.jsonl")
+    assert df.empty
+    assert list(df.columns) == ["year", "week", "season_type", "wins", "losses"]
+
+
+def test_add_manual_record_roundtrip(log_paths):
+    log_dir, _ = log_paths
+    manual_file = log_dir / "manual_records.jsonl"
+
+    pick_log.add_manual_record(2026, 1, "regular", 28, 21, log_dir=log_dir, manual_file=manual_file)
+
+    df = pick_log.load_manual_records(manual_file)
+    assert len(df) == 1
+    assert df.iloc[0]["year"] == 2026
+    assert df.iloc[0]["week"] == 1
+    assert df.iloc[0]["wins"] == 28
+    assert df.iloc[0]["losses"] == 21
+
+
+def test_add_manual_record_overwrites_the_same_slate(log_paths):
+    log_dir, _ = log_paths
+    manual_file = log_dir / "manual_records.jsonl"
+
+    pick_log.add_manual_record(2026, 1, "regular", 28, 21, log_dir=log_dir, manual_file=manual_file)
+    pick_log.add_manual_record(2026, 1, "regular", 30, 19, log_dir=log_dir, manual_file=manual_file)  # correction
+
+    df = pick_log.load_manual_records(manual_file)
+    assert len(df) == 1  # replaced, not appended
+    assert df.iloc[0]["wins"] == 30
+    assert df.iloc[0]["losses"] == 19
+
+
+def test_add_manual_record_keeps_distinct_slates_separate(log_paths):
+    log_dir, _ = log_paths
+    manual_file = log_dir / "manual_records.jsonl"
+
+    pick_log.add_manual_record(2026, 1, "regular", 28, 21, log_dir=log_dir, manual_file=manual_file)
+    pick_log.add_manual_record(2026, None, "postseason", 5, 2, log_dir=log_dir, manual_file=manual_file)
+
+    df = pick_log.load_manual_records(manual_file)
+    assert len(df) == 2
+
+
+def test_delete_manual_record_removes_only_the_matching_slate(log_paths):
+    log_dir, _ = log_paths
+    manual_file = log_dir / "manual_records.jsonl"
+    pick_log.add_manual_record(2026, 1, "regular", 28, 21, log_dir=log_dir, manual_file=manual_file)
+    pick_log.add_manual_record(2026, 2, "regular", 10, 5, log_dir=log_dir, manual_file=manual_file)
+
+    pick_log.delete_manual_record(2026, 1, "regular", manual_file=manual_file)
+
+    df = pick_log.load_manual_records(manual_file)
+    assert len(df) == 1
+    assert df.iloc[0]["week"] == 2
+
+
+def test_delete_manual_record_is_a_noop_when_nothing_matches(log_paths):
+    log_dir, _ = log_paths
+    manual_file = log_dir / "manual_records.jsonl"
+    pick_log.delete_manual_record(2026, 1, "regular", manual_file=manual_file)  # file doesn't exist yet
+    assert pick_log.load_manual_records(manual_file).empty
