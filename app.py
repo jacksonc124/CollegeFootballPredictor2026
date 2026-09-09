@@ -1350,10 +1350,36 @@ with tab5:
                "calibration check above, this has no look-ahead bias. It's the real record, but it "
                "only covers whatever's been logged via the 📌 Log Picks button on the Pick'em tab.")
 
+    # The log itself lives on the app's local disk (see the backup/restore caption below) and
+    # a reboot wipes it — this has actually happened. A manually-entered prior record can't be
+    # lost the same way: it's saved in the page's URL (like Favorite Team), which survives a
+    # reboot even though the log doesn't. It's a totals-only adjustment, not fabricated games,
+    # so it deliberately doesn't touch Record by week or Game-by-game results below.
+    with st.expander("➕ Include a manually-entered prior record"):
+        st.caption("If a reboot or redeploy wiped logged picks before you backed them up, enter "
+                   "what you remember here — it's added to the totals below. There's no per-game "
+                   "detail behind it, so it won't show up in Record by week or Game-by-game results.")
+        pc1, pc2 = st.columns(2)
+        with pc1:
+            prior_wins = st.number_input("Prior Wins", min_value=0, step=1,
+                                          value=int(st.query_params.get("prior_wins", 0)))
+        with pc2:
+            prior_losses = st.number_input("Prior Losses", min_value=0, step=1,
+                                            value=int(st.query_params.get("prior_losses", 0)))
+        if prior_wins:
+            st.query_params["prior_wins"] = str(prior_wins)
+        else:
+            st.query_params.pop("prior_wins", None)
+        if prior_losses:
+            st.query_params["prior_losses"] = str(prior_losses)
+        else:
+            st.query_params.pop("prior_losses", None)
+
     logged_df = pick_log.load_log()
     if logged_df.empty:
-        st.info("No picks logged yet. Use the 📌 Log Picks button on the Pick'em tab each week "
-                "to start building a real track record.")
+        graded_log = logged_df
+        log_acc = {"n": 0, "wins": 0, "losses": 0, "win_rate": None}
+        week_record = pick_log.summarize_by_week(graded_log)
     else:
         with st.spinner("Grading logged picks against final scores…"):
             graded_log = pick_log.grade_logged_picks(bearer_token)
@@ -1364,17 +1390,26 @@ with tab5:
         # (instead of leaving people to infer it from "92 seems like a lot") makes that
         # explicit instead of reading like a possible bug.
         week_record = pick_log.summarize_by_week(graded_log)
-        if log_acc["n"] == 0:
-            st.info(f"{len(logged_df)} pick(s) logged, but none have final scores yet.")
-        else:
-            lg1, lg2, lg3, lg4 = st.columns(4)
-            lg1.metric("Logged Picks Graded", log_acc["n"])
-            lg2.metric("Win Rate", f"{log_acc['win_rate']:.1%}" if log_acc["win_rate"] is not None else "—")
-            lg3.metric("Wins / Losses", f"{log_acc['wins']} / {log_acc['losses']}")
-            lg4.metric("Slates Logged", len(week_record))
-            st.caption(f"Cumulative across {len(week_record)} logged slate(s) — see Record by week below "
-                       f"for the breakdown per slate.")
 
+    total_wins = log_acc["wins"] + prior_wins
+    total_losses = log_acc["losses"] + prior_losses
+    total_n = total_wins + total_losses
+
+    if total_n == 0:
+        st.info("No picks logged yet, and no prior record entered above. Use the 📌 Log Picks "
+                "button on the Pick'em tab each week to start building a real track record.")
+    else:
+        lg1, lg2, lg3, lg4 = st.columns(4)
+        lg1.metric("Logged Picks Graded", total_n)
+        lg2.metric("Win Rate", f"{total_wins / total_n:.1%}")
+        lg3.metric("Wins / Losses", f"{total_wins} / {total_losses}")
+        lg4.metric("Slates Logged", len(week_record))
+        carryover_note = (f" (includes a manually-entered {prior_wins}-{prior_losses} prior record)"
+                           if prior_wins or prior_losses else "")
+        st.caption(f"Cumulative across {len(week_record)} logged slate(s){carryover_note} — see "
+                   f"Record by week below for the per-slate breakdown.")
+
+    if not logged_df.empty:
         st.markdown("#### Record by week")
         st.caption("Every logged slate, win/loss record once results are in — 'Pending' means it's "
                    "logged but the games haven't finished yet.")
