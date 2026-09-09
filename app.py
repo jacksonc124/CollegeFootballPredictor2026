@@ -1295,59 +1295,9 @@ def get_season_backtest(yr):
 with tab5:
     st.markdown("## 📊 Model Accuracy")
 
-    # Deliberately small: this used to show a full win-rate/record breakdown, but that
-    # number is inflated by look-ahead bias in a way CFBD's data makes unfixable (see the
-    # warning below) — an impressive-looking but wrong number is worse than none at all in
-    # a betting context. What survives that bias reasonably well is the *relative* question
-    # "does higher confidence actually track with better results", so that's all this shows
-    # now. The real, unbiased accuracy lives in Verified Accuracy below.
-    st.markdown("#### 🎯 Tier Calibration Check")
-    st.caption("Does higher confidence (Tier A) actually track with better results than lower "
-               "confidence (Tier C)? Not a real accuracy number — see why below.")
-    st.warning(
-        "⚠️ **Look-ahead bias.** CFBD's SP+ ratings are one value per team per *year* — the "
-        "fully-converged, end-of-season rating — not what was knowable the week a game was "
-        "actually played. Grading past weeks with it means the 'prediction' already reflects "
-        "games that hadn't happened yet, which inflates the numbers below. There's no clean fix "
-        "(CFBD doesn't expose historical weekly snapshots), so treat this as a rough directional "
-        "check — does Tier A actually beat Tier C — not a performance claim.",
-        icon="⚠️",
-    )
-
-    if "accuracy_loaded_year" not in st.session_state:
-        st.session_state["accuracy_loaded_year"] = None
-    is_loaded = st.session_state["accuracy_loaded_year"] == year
-
-    if not is_loaded:
-        st.info(f"Checks every completed week of {year} — up to ~3× the API calls the rest of the "
-                f"app uses combined. Cached afterward (6 hours), so this only costs quota once per season.")
-        if st.button("🔄 Run Calibration Check", key="run_accuracy", type="primary"):
-            st.session_state["accuracy_loaded_year"] = year
-            st.rerun()
-    else:
-        with st.spinner("Backtesting every completed week of the season…"):
-            graded = get_season_backtest(year)
-
-        if graded.empty:
-            st.info("No completed games with results yet for this season.")
-        else:
-            tier_summary = backtest.summarize_by_tier(graded)
-            st.dataframe(
-                tier_summary.rename(columns={
-                    "tier": "Tier", "n": "N", "wins": "Wins",
-                    "avg_predicted_cover_prob": "Predicted Cover Prob", "actual_win_rate": "Actual Win Rate",
-                }),
-                use_container_width=True, hide_index=True,
-                column_config={
-                    "Predicted Cover Prob": st.column_config.ProgressColumn("Predicted Cover Prob", min_value=0.0, max_value=1.0),
-                    "Actual Win Rate": st.column_config.ProgressColumn("Actual Win Rate", min_value=0.0, max_value=1.0),
-                },
-            )
-
-    st.markdown("---")
-    st.markdown("## ✅ Verified Accuracy (Logged Picks)")
+    st.markdown("### ✅ Verified Accuracy (Logged Picks)")
     st.caption("Only picks explicitly logged *before* their games were played — unlike the tier "
-               "calibration check above, this has no look-ahead bias. It's the real record, but it "
+               "calibration check below, this has no look-ahead bias. It's the real record, but it "
                "only covers whatever's been logged via the 📌 Log Picks button on the Pick'em tab.")
 
     logged_df = pick_log.load_log()
@@ -1549,6 +1499,57 @@ with tab5:
             merge_df = pd.read_csv(uploaded_merge)
             pick_log.merge_log(merge_df)
             st.success("Log merged — reload the page to see it reflected.")
+
+    st.markdown("---")
+    # Deliberately small and below Verified Accuracy: this used to show a full win-rate/
+    # record breakdown, but that number is inflated by look-ahead bias in a way CFBD's data
+    # makes unfixable (see the warning below) — an impressive-looking but wrong number is
+    # worse than none at all in a betting context. What survives that bias reasonably well
+    # is the *relative* question "does higher confidence actually track with better
+    # results", so that's all this shows. The real, unbiased accuracy is Verified Accuracy
+    # above — this stays secondary, both in position and size.
+    st.markdown("#### 🎯 Tier Calibration Check")
+    st.caption("Does higher confidence (Tier A) actually track with better results than lower "
+               "confidence (Tier C)? Not a real accuracy number — see why below.")
+    st.warning(
+        "⚠️ **Look-ahead bias.** CFBD's SP+ ratings are one value per team per *year* — the "
+        "fully-converged, end-of-season rating — not what was knowable the week a game was "
+        "actually played. Grading past weeks with it means the 'prediction' already reflects "
+        "games that hadn't happened yet, which inflates the numbers below. There's no clean fix "
+        "(CFBD doesn't expose historical weekly snapshots), so treat this as a rough directional "
+        "check — does Tier A actually beat Tier C — not a performance claim.",
+        icon="⚠️",
+    )
+
+    if "accuracy_loaded_year" not in st.session_state:
+        st.session_state["accuracy_loaded_year"] = None
+    is_loaded = st.session_state["accuracy_loaded_year"] == year
+
+    if not is_loaded:
+        st.info(f"Checks every completed week of {year} — up to ~3× the API calls the rest of the "
+                f"app uses combined. Cached afterward (6 hours), so this only costs quota once per season.")
+        if st.button("🔄 Run Calibration Check", key="run_accuracy", type="primary"):
+            st.session_state["accuracy_loaded_year"] = year
+            st.rerun()
+    else:
+        with st.spinner("Backtesting every completed week of the season…"):
+            graded = get_season_backtest(year)
+
+        if graded.empty:
+            st.info("No completed games with results yet for this season.")
+        else:
+            tier_summary = backtest.summarize_by_tier(graded)
+            st.dataframe(
+                tier_summary.rename(columns={
+                    "tier": "Tier", "n": "N", "wins": "Wins",
+                    "avg_predicted_cover_prob": "Predicted Cover Prob", "actual_win_rate": "Actual Win Rate",
+                }),
+                use_container_width=True, hide_index=True,
+                column_config={
+                    "Predicted Cover Prob": st.column_config.ProgressColumn("Predicted Cover Prob", min_value=0.0, max_value=1.0),
+                    "Actual Win Rate": st.column_config.ProgressColumn("Actual Win Rate", min_value=0.0, max_value=1.0),
+                },
+            )
 
 
 # ── TAB 6: Stats ───────────────────────────────────────────────────────────────
