@@ -138,6 +138,21 @@ def restore_log(df: pd.DataFrame, log_dir: Path = LOG_DIR, log_file: Path = LOG_
             f.write(json.dumps(row.to_dict()) + "\n")
 
 
+def merge_log(df: pd.DataFrame, log_dir: Path = LOG_DIR, log_file: Path = LOG_FILE) -> None:
+    """
+    Append df's rows onto the existing log rather than replacing it — for reconstructing a
+    slate that was lost (e.g. from an old CSV export of picks, re-graded against real
+    results) without wiping whatever's been logged normally since. Safe even if df
+    overlaps a slate that's already logged: load_log() dedupes by (year, week,
+    season_type, home_team, away_team) keeping the earliest logged_at, so re-adding an
+    already-present game doesn't double it, and a genuinely new slate lands as new rows.
+    """
+    log_dir.mkdir(exist_ok=True)
+    with log_file.open("a") as f:
+        for _, row in df.iterrows():
+            f.write(json.dumps(row.to_dict()) + "\n")
+
+
 def grade_logged_picks(bearer_token: str, log_file: Path = LOG_FILE) -> pd.DataFrame:
     """
     Grade every logged pick against actual final scores, for weeks where results are

@@ -1525,16 +1525,30 @@ with tab5:
     st.caption("⚠️ This log lives on the app's local disk and is **not** committed to git — a "
                "redeploy pulls a fresh container and wipes it. Download periodically to keep a "
                "permanent record, and restore after a reset.")
-    bk_col1, bk_col2 = st.columns(2)
+    bk_col1, bk_col2, bk_col3 = st.columns(3)
     with bk_col1:
         st.download_button("⬇️ Download Log (CSV)", data=logged_df.to_csv(index=False),
                            file_name="pick_log.csv", mime="text/csv", disabled=logged_df.empty)
     with bk_col2:
-        uploaded_log = st.file_uploader("⬆️ Restore Log (CSV)", type="csv", key="restore_log_upload")
+        uploaded_log = st.file_uploader("⬆️ Replace Log (CSV)", type="csv", key="restore_log_upload",
+                                         help="Overwrites the entire log with this file — anything logged "
+                                              "since isn't kept. Use Merge instead unless you specifically "
+                                              "want to discard what's currently logged.")
         if uploaded_log is not None:
             restored_df = pd.read_csv(uploaded_log)
             pick_log.restore_log(restored_df)
-            st.success("Log restored — reload the page to see it reflected.")
+            st.success("Log replaced — reload the page to see it reflected.")
+    with bk_col3:
+        uploaded_merge = st.file_uploader("⬆️ Merge Log (CSV)", type="csv", key="merge_log_upload",
+                                           help="Adds this file's picks alongside whatever's already "
+                                                "logged, instead of replacing it — for reconstructing a "
+                                                "lost slate (e.g. from an old picks export re-graded "
+                                                "against results) without losing anything logged since. "
+                                                "A slate that's already logged is safely deduplicated.")
+        if uploaded_merge is not None:
+            merge_df = pd.read_csv(uploaded_merge)
+            pick_log.merge_log(merge_df)
+            st.success("Log merged — reload the page to see it reflected.")
 
 
 # ── TAB 6: Stats ───────────────────────────────────────────────────────────────

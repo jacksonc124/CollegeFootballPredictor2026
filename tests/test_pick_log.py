@@ -155,6 +155,38 @@ def test_restore_log_replaces_existing_contents(log_paths):
     assert restored.iloc[0]["home_team"] == "X"
 
 
+def test_merge_log_appends_without_erasing_existing_entries(log_paths):
+    log_dir, log_file = log_paths
+    pick_log.log_picks(make_picks_df(), 2026, 2, "regular", log_dir=log_dir, log_file=log_file)
+    assert len(pick_log.load_log(log_file)) == 1
+
+    reconstructed = pd.DataFrame([
+        {"logged_at": "2026-08-29T12:00:00+00:00", "year": 2026, "week": 1, "season_type": "regular",
+         "home_team": "Old U", "away_team": "Other U", "market_spread_home": -7.0, "pick_team": "Old U",
+         "model_pick": "HOME (Old U)", "cover_prob": 0.6, "edge_points": 3.0, "tier": "A"},
+    ])
+    pick_log.merge_log(reconstructed, log_dir=log_dir, log_file=log_file)
+
+    merged = pick_log.load_log(log_file)
+    assert len(merged) == 2  # both the original week 2 entry and the reconstructed week 1 one
+    assert set(merged["week"]) == {1, 2}
+
+
+def test_merge_log_relies_on_load_log_dedup_for_overlapping_slates(log_paths):
+    log_dir, log_file = log_paths
+    pick_log.log_picks(make_picks_df(), 2025, 3, "regular", log_dir=log_dir, log_file=log_file)
+
+    # Re-merging the exact same slate/game shouldn't double it once read back.
+    duplicate = pd.DataFrame([
+        {"logged_at": "2025-01-01T00:00:00Z", "year": 2025, "week": 3, "season_type": "regular",
+         "home_team": "Home U", "away_team": "Away U", "market_spread_home": -3.0, "pick_team": "Home U",
+         "model_pick": "HOME (Home U)", "cover_prob": 0.65, "edge_points": 4.0, "tier": "A"},
+    ])
+    pick_log.merge_log(duplicate, log_dir=log_dir, log_file=log_file)
+
+    assert len(pick_log.load_log(log_file)) == 1
+
+
 def test_grade_logged_picks_empty_log_returns_empty(log_paths):
     _, log_file = log_paths
     result = pick_log.grade_logged_picks("fake-token", log_file=log_file)
