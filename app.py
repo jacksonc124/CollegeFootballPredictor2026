@@ -788,8 +788,20 @@ with tab0:
                 if status == "in_progress":
                     clock_str = (f"Q{live['period']} {live['clock']}"
                                  if live.get("period") and live.get("clock") else "In Progress")
+                    # "Currently covering" against the live (not final) score — same
+                    # grade_pick() math as the final-score case, just fed a score that can
+                    # still change. Colored, but deliberately labeled "(live)" everywhere
+                    # it appears so it's never mistaken for the graded, final result.
+                    cover_html = ""
+                    if spread is not None and pick_team:
+                        live_outcome = backtest.grade_pick(pick_team, home, away, spread, hp, ap)
+                        cover_label = {"win": "Covering", "loss": "Not Covering", "push": "Push"}.get(live_outcome)
+                        if cover_label:
+                            color = OUTCOME_COLORS.get(live_outcome, "")
+                            style = f' style="color:{color};"' if color else ""
+                            cover_html = f' · <span{style}>{cover_label} (live)</span>'
                     live_html = (f'<div class="today-live status-live">🔴 LIVE · {clock_str} · '
-                                 f'{away} {ap} — {home} {hp}</div>')
+                                 f'{away} {ap} — {home} {hp}{cover_html}</div>')
                 elif status == "completed":
                     # Reuses the exact same grading logic as Game-by-game results, so "did
                     # the pick win" always means the same thing everywhere in the app.
