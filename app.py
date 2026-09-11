@@ -177,6 +177,14 @@ st.markdown("""
     .today-card.tier-C { border-left: 4px solid #fb923c; }
     .today-card-top { display: flex; align-items: baseline; justify-content: space-between; }
     .today-kickoff { font-size: 12px; opacity: 0.6; }
+    .today-live {
+        font-size: 12px; font-weight: 600; margin-top: 4px; padding: 3px 8px;
+        border-radius: 4px; display: inline-block;
+    }
+    .today-live.status-live { background: #ef444422; color: #ef4444; }
+    .today-live.status-final-win { background: #22c55e22; color: #22c55e; }
+    .today-live.status-final-loss { background: #ef444422; color: #ef4444; }
+    .today-live.status-final-push { background: rgba(128,128,128,0.15); color: #6b7280; }
     .today-stats {
         display: grid; grid-template-columns: repeat(2, 1fr);
         gap: 0 12px; margin-top: 8px; font-size: 12px;
@@ -482,6 +490,20 @@ def get_game_weather(yr, wk, stype):
         return {}
 
 
+@st.cache_data(show_spinner=False, ttl=60)
+def get_scoreboard(known_team_names):
+    # Live score data — a 1-hour cache (this app's usual default) would leave the Today
+    # tab frozen mid-game for most of an hour; 60s keeps it close to real-time without
+    # hammering the API on every widget interaction's rerun. Non-fatal on failure: no
+    # live scores just means Today's Games falls back to showing kickoff time only, same
+    # as before this feature existed.
+    try:
+        return model.get_scoreboard(bearer_token, known_team_names)
+    except Exception as e:
+        print(f"Warning: failed to fetch live scoreboard: {e}")
+        return {}
+
+
 @st.cache_data(show_spinner=False, ttl=21600)
 def get_adjusted_metrics(yr):
     # Requires CFBD's "adjustedMetrics" feature (Tier 1+). Same graceful degradation as weather.
@@ -723,6 +745,7 @@ with tab0:
     else:
         has_ml = "home_moneyline" in today_df.columns
         has_total = "market_total" in today_df.columns
+        scoreboard = get_scoreboard(tuple(logos.keys()))
 
         today_cards_html = '<div class="today-grid">'
         for _, row in today_df.iterrows():
@@ -754,6 +777,30 @@ with tab0:
                         f'<span class="today-stat-value">{row["total_pick"]}</span></div>'
                     )
 
+            # Live score, when the scoreboard has this game and it's actually underway —
+            # a "scheduled" game (the common case pre-kickoff) gets no extra line at all,
+            # same as before this feature existed.
+            live = scoreboard.get((home, away))
+            live_html = ""
+            if live and live.get("home_points") is not None and live.get("away_points") is not None:
+                hp, ap = int(live["home_points"]), int(live["away_points"])
+                status = live.get("status")
+                if status == "in_progress":
+                    clock_str = (f"Q{live['period']} {live['clock']}"
+                                 if live.get("period") and live.get("clock") else "In Progress")
+                    live_html = (f'<div class="today-live status-live">🔴 LIVE · {clock_str} · '
+                                 f'{away} {ap} — {home} {hp}</div>')
+                elif status == "completed":
+                    # Reuses the exact same grading logic as Game-by-game results, so "did
+                    # the pick win" always means the same thing everywhere in the app.
+                    outcome = (backtest.grade_pick(pick_team, home, away, spread, hp, ap)
+                               if spread is not None and pick_team else None)
+                    label = {"win": "✅ Pick Won", "loss": "❌ Pick Lost", "push": "🟰 Push"}.get(outcome, "Final")
+                    css_class = {"win": "status-final-win", "loss": "status-final-loss",
+                                  "push": "status-final-push"}.get(outcome, "status-final-push")
+                    live_html = (f'<div class="today-live {css_class}">🏁 FINAL {away} {ap} — '
+                                 f'{home} {hp} · {label}</div>')
+
             today_cards_html += (
                 f'<div class="today-card tier-{tier}">'
                 f'<div class="today-card-top">'
@@ -763,6 +810,7 @@ with tab0:
                 f'<div class="pickem-logos">{logo_img(away, 32)}<span class="pickem-vs">@</span>{logo_img(home, 32)}</div>'
                 f'<div class="pickem-matchup">{fav_star(away)}{model.rank_badge(away, rankings)}{away} @ '
                 f'{fav_star(home)}{model.rank_badge(home, rankings)}{home}</div>'
+                f'{live_html}'
                 f'<div class="pickem-hero">'
                 f'<span class="pickem-cover-prob" style="color:{tier_color};">{cover:.0%}</span>'
                 f'</div>'

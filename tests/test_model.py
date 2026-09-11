@@ -68,6 +68,24 @@ def test_read_cache_with_none_ttl_never_expires(tmp_path):
     assert model._read_cache(cache_file, ttl_seconds=None) == [1, 2, 3]
 
 
+def test_match_scoreboard_team_strips_the_mascot_suffix():
+    known = ["Ohio State", "Ohio", "Miami", "Texas A&M"]
+    assert model.match_scoreboard_team("Ohio State Buckeyes", known) == "Ohio State"
+
+
+def test_match_scoreboard_team_prefers_the_longer_match():
+    # "Ohio" is itself a real FBS school (Ohio Bobcats) distinct from Ohio State — a
+    # shortest-first or unordered match would incorrectly match "Ohio" here.
+    known = ["Ohio State", "Ohio"]
+    assert model.match_scoreboard_team("Ohio State Buckeyes", known) == "Ohio State"
+    assert model.match_scoreboard_team("Ohio Bobcats", known) == "Ohio"
+
+
+def test_match_scoreboard_team_returns_none_for_an_unknown_team():
+    # e.g. an FCS opponent, which never appears in this app's FBS-only ratings/logos.
+    assert model.match_scoreboard_team("Wofford Terriers", ["Ohio State", "Miami"]) is None
+
+
 def test_pick_line_prefers_provider():
     game = {"lines": [{"provider": "DraftKings", "spread": -3.5}, {"provider": "consensus", "spread": -3.0}]}
     assert model.pick_line(game, "consensus")["spread"] == -3.0

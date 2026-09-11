@@ -418,6 +418,71 @@ def get_adjusted_team_metrics(bearer_token: str, year: int, cache_dir: Path = CA
     return result
 
 
+def match_scoreboard_team(scoreboard_name: str, known_team_names: list[str]) -> str | None:
+    """
+    CFBD's live scoreboard names teams as "School Mascot" (e.g. "Ohio State Buckeyes"),
+    unlike every other endpoint this app uses, which returns the bare school name ("Ohio
+    State"). Matches by finding the longest known school name that's a prefix of
+    scoreboard_name — checking longest-first so a team like "Ohio State Buckeyes" matches
+    "Ohio State" rather than incorrectly matching a shorter "Ohio" if both were known names.
+    Returns None if no known name matches — expected (not an error) for an FCS opponent,
+    since this app's ratings/logos are FBS-only.
+    """
+    for name in sorted(known_team_names, key=len, reverse=True):
+        if scoreboard_name.startswith(name):
+            return name
+    return None
+
+
+def get_scoreboard(bearer_token: str, known_team_names: list[str], cache_dir: Path = CACHE_DIR,
+                    cache_ttl_seconds: float = 60) -> dict:
+    """
+    Pull live/current status for FBS games — whether a game is scheduled, in progress, or
+    completed, the period/clock, and each side's current points. Returns
+    {(home_team, away_team): {"status": "scheduled"|"in_progress"|"completed"|None,
+    "period": int | None, "clock": str | None, "home_points": int | None,
+    "away_points": int | None}}, keyed by this app's own team names (via
+    match_scoreboard_team) rather than the scoreboard's own "School Mascot" naming.
+
+    Deliberately a very short cache_ttl_seconds (default 60s) — unlike season-long ratings
+    or weekly lines, this is meant to be live, and the no-expiry-cache mistake fixed
+    elsewhere in this app (see _read_cache) would be especially bad here: a score frozen at
+    halftime forever. The raw board (not the matched/filtered result) is what's cached, so
+    the cache stays valid regardless of which known_team_names a given caller passes.
+    """
+    import cfbd
+
+    cache_file = cache_path("scoreboard.json", cache_dir=cache_dir)
+    cached = _read_cache(cache_file, cache_ttl_seconds)
+    if cached is not None:
+        raw = cached
+    else:
+        with make_client(bearer_token) as client:
+            board = cfbd.GamesApi(client).get_scoreboard(classification="fbs")
+        raw = [
+            {
+                "home_name": g.home_team.name, "away_name": g.away_team.name,
+                "status": g.status.value if g.status else None,
+                "period": g.period, "clock": g.clock,
+                "home_points": g.home_team.points, "away_points": g.away_team.points,
+            }
+            for g in board
+        ]
+        _write_cache(cache_file, raw)
+
+    result = {}
+    for row in raw:
+        home = match_scoreboard_team(row["home_name"], known_team_names)
+        away = match_scoreboard_team(row["away_name"], known_team_names)
+        if home is None or away is None:
+            continue
+        result[(home, away)] = {
+            "status": row["status"], "period": row["period"], "clock": row["clock"],
+            "home_points": row["home_points"], "away_points": row["away_points"],
+        }
+    return result
+
+
 def get_calendar(bearer_token: str, year: int, cache_dir: Path = CACHE_DIR) -> list[dict]:
     """
     Pull the real regular-season calendar (week -> date range) for a year. Returns a list
