@@ -303,3 +303,69 @@ def test_delete_manual_record_is_a_noop_when_nothing_matches(log_paths):
     manual_file = log_dir / "manual_records.jsonl"
     pick_log.delete_manual_record(2026, 1, "regular", manual_file=manual_file)  # file doesn't exist yet
     assert pick_log.load_manual_records(manual_file).empty
+
+
+def test_sync_from_github_noop_without_a_token(log_paths, monkeypatch):
+    log_dir, log_file = log_paths
+    manual_file = log_dir / "manual_records.jsonl"
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("should never touch the network without a token")
+    monkeypatch.setattr(pick_log, "_github_get_file", fail_if_called)
+
+    pick_log.sync_from_github("", log_dir=log_dir, log_file=log_file, manual_file=manual_file)
+    # No exception, and nothing written — a true no-op, not a failed sync.
+    assert not log_file.exists()
+
+
+def test_sync_to_github_noop_without_a_token(log_paths, monkeypatch):
+    log_dir, log_file = log_paths
+    manual_file = log_dir / "manual_records.jsonl"
+    pick_log.log_picks(make_picks_df(), 2026, 1, "regular", log_dir=log_dir, log_file=log_file)
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("should never touch the network without a token")
+    monkeypatch.setattr(pick_log, "_github_put_file", fail_if_called)
+
+    pick_log.sync_to_github("", log_dir=log_dir, log_file=log_file, manual_file=manual_file)  # should not raise
+
+
+def test_sync_to_github_swallows_failures(log_paths, monkeypatch):
+    log_dir, log_file = log_paths
+    manual_file = log_dir / "manual_records.jsonl"
+    pick_log.log_picks(make_picks_df(), 2026, 1, "regular", log_dir=log_dir, log_file=log_file)
+
+    def boom(*a, **k):
+        raise RuntimeError("network is down")
+    monkeypatch.setattr(pick_log, "_github_put_file", boom)
+
+    pick_log.sync_to_github("fake-token", log_dir=log_dir, log_file=log_file, manual_file=manual_file)  # no raise
+
+
+def test_sync_from_github_swallows_failures(log_paths, monkeypatch):
+    log_dir, log_file = log_paths
+    manual_file = log_dir / "manual_records.jsonl"
+
+    def boom(*a, **k):
+        raise RuntimeError("network is down")
+    monkeypatch.setattr(pick_log, "_github_get_file", boom)
+
+    pick_log.sync_from_github("fake-token", log_dir=log_dir, log_file=log_file, manual_file=manual_file)  # no raise
+    assert not log_file.exists()  # nothing pulled, but no crash
+
+
+def test_sync_from_github_writes_pulled_content(log_paths, monkeypatch):
+    log_dir, log_file = log_paths
+    manual_file = log_dir / "manual_records.jsonl"
+
+    def fake_get(path, token):
+        if path.endswith("logged_picks.jsonl"):
+            return '{"year": 2026, "week": 1}\n', "sha1"
+        return None, None
+    monkeypatch.setattr(pick_log, "_github_get_file", fake_get)
+
+    pick_log.sync_from_github("fake-token", log_dir=log_dir, log_file=log_file, manual_file=manual_file)
+
+    assert log_file.exists()
+    assert json.loads(log_file.read_text().strip()) == {"year": 2026, "week": 1}
+    assert not manual_file.exists()  # fake_get returned None for this one — nothing to write

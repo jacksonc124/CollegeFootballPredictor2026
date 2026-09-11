@@ -5,12 +5,18 @@ end-of-season SP+ ratings against past weeks, which has real look-ahead bias (se
 module's docstring); this log sidesteps the problem entirely by capturing what the model
 actually said in advance, then grading it against results once they're final.
 
-PERSISTENCE CAVEAT: this log lives on local disk (LOG_DIR) and is not committed to git.
-On Streamlit Cloud, a redeploy pulls a fresh container and wipes local disk — use the
-Download/Restore Log controls in the app to back it up if you want it to survive
-redeploys.
+PERSISTENCE: local disk (LOG_DIR) is still the primary read/write target — every function
+below reads and writes it exactly as before, and behaves identically whether or not GitHub
+sync is configured. sync_from_github()/sync_to_github() are an optional layer on top: when
+a github_token is supplied, they pull/push these same files to a dedicated branch (not the
+branch Streamlit deploys from) in this repo, so the log survives a Streamlit Cloud redeploy
+wiping local disk. Call sync_from_github() once near the start of a session (before the
+first read) and sync_to_github() after any write. Both are no-ops if github_token is falsy,
+so the log still works exactly as before (local-disk-only, wiped on redeploy) if GitHub
+sync was never configured — see the Backup/Restore Log controls in the app for that case.
 """
 
+import base64
 import json
 from pathlib import Path
 
@@ -19,6 +25,12 @@ import pandas as pd
 LOG_DIR = Path("pick_log")
 LOG_FILE = LOG_DIR / "logged_picks.jsonl"
 MANUAL_RECORDS_FILE = LOG_DIR / "manual_records.jsonl"
+
+# The data branch is dedicated to holding these two files as committed content — never the
+# branch Streamlit Cloud deploys from, so a sync_to_github() write never triggers a redeploy.
+GITHUB_REPO = "jacksonc124/CollegeFootballPredictor2026"
+GITHUB_BRANCH = "data"
+GITHUB_API_BASE = "https://api.github.com"
 
 LOG_COLUMNS = [
     "logged_at", "year", "week", "season_type", "home_team", "away_team",
@@ -267,3 +279,84 @@ def delete_manual_record(year: int, week: int | None, season_type: str,
     with manual_file.open("w") as f:
         for r in records:
             f.write(json.dumps(r) + "\n")
+
+
+def _github_headers(github_token: str) -> dict:
+    return {"Authorization": f"Bearer {github_token}", "Accept": "application/vnd.github+json"}
+
+
+def _github_get_file(path: str, github_token: str) -> tuple[str | None, str | None]:
+    """(content, sha) for a file on GITHUB_BRANCH, or (None, None) if it doesn't exist there yet."""
+    import requests
+
+    url = f"{GITHUB_API_BASE}/repos/{GITHUB_REPO}/contents/{path}"
+    resp = requests.get(url, params={"ref": GITHUB_BRANCH}, headers=_github_headers(github_token), timeout=10)
+    if resp.status_code == 404:
+        return None, None
+    resp.raise_for_status()
+    data = resp.json()
+    return base64.b64decode(data["content"]).decode("utf-8"), data["sha"]
+
+
+def _github_put_file(path: str, content: str, github_token: str, message: str) -> None:
+    """Create or update a file on GITHUB_BRANCH with content, via a single commit."""
+    import requests
+
+    _, sha = _github_get_file(path, github_token)
+    url = f"{GITHUB_API_BASE}/repos/{GITHUB_REPO}/contents/{path}"
+    payload = {"message": message, "content": base64.b64encode(content.encode("utf-8")).decode("ascii"),
+               "branch": GITHUB_BRANCH}
+    if sha:
+        payload["sha"] = sha
+    resp = requests.put(url, json=payload, headers=_github_headers(github_token), timeout=10)
+    resp.raise_for_status()
+
+
+def sync_from_github(github_token: str, log_dir: Path = LOG_DIR, log_file: Path = LOG_FILE,
+                      manual_file: Path = MANUAL_RECORDS_FILE) -> None:
+    """
+    Pull the log and manual records down from GITHUB_BRANCH to local disk, overwriting
+    whatever's there. Meant to run once near the start of a session, before any reads, so a
+    fresh post-redeploy container recovers what was there before instead of starting empty.
+
+    A no-op if github_token is falsy (GitHub sync not configured — local disk stays the
+    only copy, as before). Also a no-op per-file if that file doesn't exist on the branch
+    yet (nothing has ever synced, e.g. right after the branch was created) — that's not an
+    error, just nothing to pull. Failures (network, bad token, rate limit) are logged and
+    swallowed rather than raised, since the app should keep working on local-only state
+    rather than break because GitHub was briefly unreachable.
+    """
+    if not github_token:
+        return
+    log_dir.mkdir(exist_ok=True)
+    for local_path in (log_file, manual_file):
+        remote_path = f"{log_dir.name}/{local_path.name}"
+        try:
+            content, _ = _github_get_file(remote_path, github_token)
+            if content is not None:
+                local_path.write_text(content)
+        except Exception as e:
+            print(f"Warning: failed to sync {remote_path} from GitHub: {e}")
+
+
+def sync_to_github(github_token: str, log_dir: Path = LOG_DIR, log_file: Path = LOG_FILE,
+                    manual_file: Path = MANUAL_RECORDS_FILE) -> None:
+    """
+    Push the log and manual records up to GITHUB_BRANCH. Call after any write (log_picks,
+    merge_log, restore_log, add_manual_record, delete_manual_record) so GitHub stays
+    current. A no-op if github_token is falsy. Non-fatal on failure — the write already
+    succeeded on local disk; it just hasn't reached GitHub yet, and the next successful
+    sync_to_github() call will catch it up (each push sends the file's full current
+    contents, not a diff, so a missed sync isn't lost, just delayed).
+    """
+    if not github_token:
+        return
+    for local_path in (log_file, manual_file):
+        if not local_path.exists():
+            continue
+        remote_path = f"{log_dir.name}/{local_path.name}"
+        try:
+            _github_put_file(remote_path, local_path.read_text(), github_token,
+                              message=f"Sync {local_path.name}")
+        except Exception as e:
+            print(f"Warning: failed to sync {remote_path} to GitHub: {e}")
