@@ -367,7 +367,8 @@ with st.sidebar:
     try:
         _sidebar_team_names = sorted(get_team_logos(year).keys())
         _sidebar_conferences = sorted(set(get_team_conferences(year).values()))
-    except Exception:
+    except Exception as e:
+        print(f"Warning: failed to load team/conference options for sidebar: {e}")
         _sidebar_team_names, _sidebar_conferences = [], []
 
     st.markdown("### ⭐ Your Team")
@@ -1548,6 +1549,20 @@ with tab5:
             },
         )
 
+    def _read_and_validate_log_csv(uploaded_file):
+        """Guard against a malformed or wrong-shaped upload corrupting the shared pick log."""
+        max_bytes = 5 * 1024 * 1024
+        if uploaded_file.size > max_bytes:
+            return None, f"File is too large ({uploaded_file.size / 1024:.0f} KB) — max is 5 MB."
+        try:
+            df = pd.read_csv(uploaded_file)
+        except Exception as e:
+            return None, f"Couldn't read that as a CSV: {e}"
+        missing = set(pick_log.LOG_COLUMNS) - set(df.columns)
+        if missing:
+            return None, f"Missing required column(s): {', '.join(sorted(missing))}."
+        return df, None
+
     st.markdown("#### Backup / restore log")
     if github_token:
         st.caption("✅ Auto-syncing to a private GitHub branch — this log survives a redeploy. "
@@ -1567,10 +1582,13 @@ with tab5:
                                               "since isn't kept. Use Merge instead unless you specifically "
                                               "want to discard what's currently logged.")
         if uploaded_log is not None:
-            restored_df = pd.read_csv(uploaded_log)
-            pick_log.restore_log(restored_df)
-            pick_log.sync_to_github(github_token)
-            st.success("Log replaced — reload the page to see it reflected.")
+            restored_df, error = _read_and_validate_log_csv(uploaded_log)
+            if error:
+                st.error(f"Couldn't replace the log: {error}")
+            else:
+                pick_log.restore_log(restored_df)
+                pick_log.sync_to_github(github_token)
+                st.success("Log replaced — reload the page to see it reflected.")
     with bk_col3:
         uploaded_merge = st.file_uploader("⬆️ Merge Log (CSV)", type="csv", key="merge_log_upload",
                                            help="Adds this file's picks alongside whatever's already "
@@ -1579,10 +1597,13 @@ with tab5:
                                                 "against results) without losing anything logged since. "
                                                 "A slate that's already logged is safely deduplicated.")
         if uploaded_merge is not None:
-            merge_df = pd.read_csv(uploaded_merge)
-            pick_log.merge_log(merge_df)
-            pick_log.sync_to_github(github_token)
-            st.success("Log merged — reload the page to see it reflected.")
+            merge_df, error = _read_and_validate_log_csv(uploaded_merge)
+            if error:
+                st.error(f"Couldn't merge the log: {error}")
+            else:
+                pick_log.merge_log(merge_df)
+                pick_log.sync_to_github(github_token)
+                st.success("Log merged — reload the page to see it reflected.")
 
     st.markdown("---")
     # Deliberately small and below Verified Accuracy: this used to show a full win-rate/

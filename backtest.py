@@ -178,7 +178,8 @@ def backtest_season(bearer_token: str, year: int, weeks, season_type: str = "reg
     for wk in weeks:
         try:
             graded = backtest_week(bearer_token, year, wk, season_type, home_field)
-        except Exception:
+        except Exception as e:
+            print(f"Warning: failed to backtest {year} week {wk} ({season_type}): {e}")
             continue
         if graded.empty:
             continue

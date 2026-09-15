@@ -188,7 +188,8 @@ def grade_logged_picks(bearer_token: str, log_file: Path = LOG_FILE) -> pd.DataF
         if key not in results_cache:
             try:
                 results_cache[key] = backtest.get_actual_results(bearer_token, row["year"], row["week"], row["season_type"])
-            except Exception:
+            except Exception as e:
+                print(f"Warning: failed to fetch actual results for {key}: {e}")
                 results_cache[key] = {}
         result = results_cache[key].get((row["home_team"], row["away_team"]))
         if result is None:
@@ -298,18 +299,30 @@ def _github_get_file(path: str, github_token: str) -> tuple[str | None, str | No
     return base64.b64decode(data["content"]).decode("utf-8"), data["sha"]
 
 
-def _github_put_file(path: str, content: str, github_token: str, message: str) -> None:
-    """Create or update a file on GITHUB_BRANCH with content, via a single commit."""
+def _github_put_file(path: str, content: str, github_token: str, message: str, _retries: int = 2) -> None:
+    """
+    Create or update a file on GITHUB_BRANCH with content, via a single commit.
+
+    The GitHub Contents API requires the current file's sha for an update, so a concurrent
+    writer (two sessions syncing at once) can race: both fetch the same sha, one PUT succeeds
+    and moves the sha forward, and the other's PUT is rejected with a 409 because its sha is
+    now stale. Retried here by re-fetching the sha and trying again, rather than letting that
+    write get silently lost by the caller's generic failure handling.
+    """
     import requests
 
-    _, sha = _github_get_file(path, github_token)
     url = f"{GITHUB_API_BASE}/repos/{GITHUB_REPO}/contents/{path}"
-    payload = {"message": message, "content": base64.b64encode(content.encode("utf-8")).decode("ascii"),
-               "branch": GITHUB_BRANCH}
-    if sha:
-        payload["sha"] = sha
-    resp = requests.put(url, json=payload, headers=_github_headers(github_token), timeout=10)
-    resp.raise_for_status()
+    for attempt in range(_retries + 1):
+        _, sha = _github_get_file(path, github_token)
+        payload = {"message": message, "content": base64.b64encode(content.encode("utf-8")).decode("ascii"),
+                   "branch": GITHUB_BRANCH}
+        if sha:
+            payload["sha"] = sha
+        resp = requests.put(url, json=payload, headers=_github_headers(github_token), timeout=10)
+        if resp.status_code == 409 and attempt < _retries:
+            continue
+        resp.raise_for_status()
+        return
 
 
 def sync_from_github(github_token: str, log_dir: Path = LOG_DIR, log_file: Path = LOG_FILE,

@@ -66,11 +66,22 @@ def _write_cache(cache_file: Path, value) -> None:
 
 
 def make_client(bearer_token: str):
+    """
+    Build a CFBD API client shared by every fetcher in this module. The generated SDK sets
+    no default request timeout at all — left alone, a hung CFBD request blocks the whole
+    app indefinitely (bounded only by the OS's own TCP timeout, which can be minutes, not
+    seconds). Every request through this client now times out after 30s total instead
+    (5s to connect, 25s to read), applied once here at the connection-pool level rather
+    than needing a per-call _request_timeout kwarg at all ~15 call sites across this file.
+    """
     import cfbd
+    import urllib3
 
     if not bearer_token:
         raise RuntimeError("BEARER_TOKEN not set")
-    return cfbd.ApiClient(cfbd.Configuration(access_token=bearer_token))
+    client = cfbd.ApiClient(cfbd.Configuration(access_token=bearer_token))
+    client.rest_client.pool_manager.connection_pool_kw["timeout"] = urllib3.Timeout(connect=5, read=25)
+    return client
 
 
 # ---------- CFBD fetchers (with JSON caching) ----------

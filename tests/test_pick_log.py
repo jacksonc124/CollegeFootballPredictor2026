@@ -2,6 +2,7 @@ import json
 
 import pandas as pd
 import pytest
+import requests
 
 import pick_log
 
@@ -352,6 +353,39 @@ def test_sync_from_github_swallows_failures(log_paths, monkeypatch):
 
     pick_log.sync_from_github("fake-token", log_dir=log_dir, log_file=log_file, manual_file=manual_file)  # no raise
     assert not log_file.exists()  # nothing pulled, but no crash
+
+
+class _FakeResponse:
+    def __init__(self, status_code):
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.exceptions.HTTPError(f"{self.status_code} error")
+
+
+def test_github_put_file_retries_once_on_conflict(monkeypatch):
+    shas = iter(["sha-old", "sha-new"])
+    monkeypatch.setattr(pick_log, "_github_get_file", lambda path, token: (None, next(shas)))
+
+    responses = iter([_FakeResponse(409), _FakeResponse(200)])
+    calls = []
+
+    def fake_put(url, json, headers, timeout):
+        calls.append(json["sha"])
+        return next(responses)
+    monkeypatch.setattr(requests, "put", fake_put)
+
+    pick_log._github_put_file("pick_log/logged_picks.jsonl", "content", "fake-token", "msg")  # no raise
+    assert calls == ["sha-old", "sha-new"]
+
+
+def test_github_put_file_raises_after_exhausting_retries(monkeypatch):
+    monkeypatch.setattr(pick_log, "_github_get_file", lambda path, token: (None, "sha-stale"))
+    monkeypatch.setattr(requests, "put", lambda *a, **k: _FakeResponse(409))
+
+    with pytest.raises(requests.exceptions.HTTPError):
+        pick_log._github_put_file("pick_log/logged_picks.jsonl", "content", "fake-token", "msg", _retries=2)
 
 
 def test_sync_from_github_writes_pulled_content(log_paths, monkeypatch):
