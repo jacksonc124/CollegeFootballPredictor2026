@@ -90,3 +90,45 @@ def test_summarize_by_week_tracks_win_rate_per_week():
     assert round(summary.loc[1, "win_rate"], 3) == round(2 / 3, 3)
     assert summary.loc[2, "win_rate"] == 0.0
     assert 3 not in summary.index
+
+
+def test_grade_total():
+    from backtest import grade_total
+    assert grade_total("OVER", 50.5, 30, 24) == "win"
+    assert grade_total("UNDER", 50.5, 30, 24) == "loss"
+    assert grade_total("OVER", 54.0, 30, 24) == "push"
+    assert grade_total("NO EDGE", 50.5, 30, 24) is None
+    assert grade_total(None, 50.5, 30, 24) is None
+    assert grade_total("OVER", float("nan"), 30, 24) is None
+
+
+def test_grade_moneyline():
+    from backtest import grade_moneyline
+    assert grade_moneyline("Home U", "Home U", 27, 20) == "win"
+    assert grade_moneyline("Away U", "Home U", 27, 20) == "loss"
+    assert grade_moneyline("Away U", "Home U", 20, 27) == "win"
+    assert grade_moneyline(None, "Home U", 27, 20) is None
+    assert grade_moneyline(float("nan"), "Home U", 27, 20) is None
+
+
+def test_moneyline_profit():
+    from backtest import moneyline_profit
+    assert moneyline_profit("win", 150) == 1.5
+    assert moneyline_profit("win", -200) == 0.5
+    assert moneyline_profit("loss", -200) == -1.0
+    assert moneyline_profit("push", 150) == 0.0
+    assert moneyline_profit(None, 150) is None
+    assert moneyline_profit("win", None) is None
+
+
+def test_summarize_market_by_group():
+    import pandas as pd
+    from backtest import summarize_market
+    df = pd.DataFrame({"total_outcome": ["win", "loss", "win", "push", None],
+                       "total_tier": ["A", "A", "B", "B", "A"]})
+    overall = summarize_market(df, "total_outcome")
+    assert (overall.iloc[0]["wins"], overall.iloc[0]["losses"], overall.iloc[0]["pushes"]) == (2, 1, 1)
+    by_tier = summarize_market(df, "total_outcome", "total_tier").set_index("total_tier")
+    assert by_tier.loc["A", "win_rate"] == 0.5
+    assert by_tier.loc["B", "win_rate"] == 1.0
+    assert summarize_market(df.iloc[0:0], "total_outcome").empty

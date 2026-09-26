@@ -100,6 +100,60 @@ def grade_pick(pick_team: str, home_team: str, away_team: str, market_spread_hom
     return "win" if not home_covered else "loss"
 
 
+def grade_total(total_pick: str | None, market_total: float | None,
+                home_points: int, away_points: int) -> str | None:
+    """Grade an OVER/UNDER pick against the final combined score (exact match is a push)."""
+    if total_pick not in ("OVER", "UNDER") or market_total is None or pd.isna(market_total):
+        return None
+    actual = home_points + away_points
+    if actual == market_total:
+        return "push"
+    went_over = actual > market_total
+    return "win" if (total_pick == "OVER") == went_over else "loss"
+
+
+def grade_moneyline(ml_pick_team: str | None, home_team: str, home_points: int, away_points: int) -> str | None:
+    """Grade a straight-up pick: win if that team won outright. A tie (not possible in
+    FBS play) is treated as a push rather than guessed at."""
+    if not ml_pick_team or (not isinstance(ml_pick_team, str)):
+        return None
+    if home_points == away_points:
+        return "push"
+    home_won = home_points > away_points
+    return "win" if (ml_pick_team == home_team) == home_won else "loss"
+
+
+def moneyline_profit(outcome: str | None, odds: float | None) -> float | None:
+    """Units won/lost on a flat 1-unit moneyline bet: +odds/100 or +100/|odds| on a win,
+    -1 on a loss, 0 on a push. None if ungraded or the price wasn't recorded."""
+    if outcome not in ("win", "loss", "push") or odds is None or pd.isna(odds):
+        return None
+    if outcome == "push":
+        return 0.0
+    if outcome == "loss":
+        return -1.0
+    return odds / 100.0 if odds > 0 else 100.0 / -odds
+
+
+def summarize_market(graded: pd.DataFrame, outcome_col: str, group_col: str | None = None) -> pd.DataFrame:
+    """Wins/losses/pushes/win rate for a graded outcome column, optionally split by
+    group_col (e.g. total_tier). Pushes are excluded from win rate, like the spread record."""
+    if outcome_col not in graded.columns:
+        return pd.DataFrame(columns=[group_col or "all", "wins", "losses", "pushes", "win_rate"])
+    decided = graded[graded[outcome_col].isin(["win", "loss", "push"])].copy()
+    decided["_all"] = "All"
+    key = group_col or "_all"
+    if decided.empty:
+        return pd.DataFrame(columns=[key, "wins", "losses", "pushes", "win_rate"])
+    out = decided.groupby(key).agg(
+        wins=(outcome_col, lambda s: (s == "win").sum()),
+        losses=(outcome_col, lambda s: (s == "loss").sum()),
+        pushes=(outcome_col, lambda s: (s == "push").sum()),
+    ).reset_index()
+    out["win_rate"] = out["wins"] / (out["wins"] + out["losses"]).where(lambda s: s > 0)
+    return out
+
+
 def backtest_week(bearer_token: str, year: int, week: int, season_type: str = "regular",
                    home_field: float = model.DEFAULT_HOME_FIELD) -> pd.DataFrame:
     """Build picks for a past week and grade each one against the actual final score."""

@@ -37,6 +37,43 @@ LOG_COLUMNS = [
     "market_spread_home", "pick_team", "model_pick", "cover_prob", "edge_points", "tier",
 ]
 
+# Over/under and moneyline picks, added after the spread-only log already existed. Optional
+# everywhere: slates logged before this existed have none of these (and can't get them
+# honestly after the fact — see backfill_extras), so they're never *required* the way
+# LOG_COLUMNS are (an old backup CSV must still upload cleanly).
+EXTRA_COLUMNS = [
+    "total_pick", "market_total", "total_cover_prob", "total_tier",
+    "ml_pick_team", "ml_odds", "ml_model_prob", "ml_edge",
+]
+
+
+def _clean(value):
+    """JSON-safe scalar: NaN/None -> None, numpy scalars -> plain Python."""
+    if value is None or (not isinstance(value, str) and pd.isna(value)):
+        return None
+    return value.item() if hasattr(value, "item") else value
+
+
+def _extras_from_row(row) -> dict:
+    """The optional total/moneyline fields for one picks-DataFrame row (None where absent)."""
+    total_pick = _clean(row.get("total_pick"))
+    if total_pick not in ("OVER", "UNDER"):
+        total_pick = None
+    ml_team = _clean(row.get("ml_pick_team")) or None
+    ml_odds = None
+    if ml_team:
+        ml_odds = _clean(row.get("home_moneyline") if ml_team == row["home_team"] else row.get("away_moneyline"))
+    return {
+        "total_pick": total_pick,
+        "market_total": _clean(row.get("market_total")) if total_pick else None,
+        "total_cover_prob": _clean(row.get("total_cover_prob")) if total_pick else None,
+        "total_tier": _clean(row.get("total_tier")) if total_pick else None,
+        "ml_pick_team": ml_team,
+        "ml_odds": ml_odds,
+        "ml_model_prob": _clean(row.get("ml_model_prob")) if ml_team else None,
+        "ml_edge": _clean(row.get("ml_edge")) if ml_team else None,
+    }
+
 
 def _read_all_entries(log_file: Path = LOG_FILE) -> list[dict]:
     if not log_file.exists():
@@ -102,11 +139,51 @@ def log_picks(df: pd.DataFrame, year: int, week: int | None, season_type: str,
                     "market_spread_home": row["market_spread_home"], "pick_team": row["pick_team"],
                     "model_pick": row["model_pick"], "cover_prob": row["cover_prob"],
                     "edge_points": row["edge_points"], "tier": row["tier"],
+                    **_extras_from_row(row),
                 }
                 f.write(json.dumps(entry) + "\n")
         return True
     finally:
         lock_path.unlink(missing_ok=True)
+
+
+def backfill_extras(df: pd.DataFrame, year: int, week: int | None, season_type: str,
+                    log_file: Path = LOG_FILE, now: pd.Timestamp | None = None) -> int:
+    """
+    Fill in total/moneyline picks for an already-logged slate that was logged before those
+    were tracked — but only for games that haven't kicked off yet (start_date in the
+    future, or unknown-TBD is skipped), since a pick captured after kickoff isn't a
+    pre-game prediction and would quietly reintroduce the look-ahead problem this log
+    exists to avoid. Never overwrites a row that already has extras. Returns how many rows
+    were filled; rewrites the file only if that's > 0.
+    """
+    if not log_file.exists() or "start_date" not in df.columns:
+        return 0
+    now = now if now is not None else pd.Timestamp.now(tz="UTC")
+    upcoming = {}
+    for _, r in df.iterrows():
+        start = _clean(r.get("start_date"))
+        if not start or bool(_clean(r.get("start_time_tbd"))):
+            continue
+        if pd.Timestamp(start) > now:
+            upcoming[(r["home_team"], r["away_team"])] = _extras_from_row(r)
+
+    entries = _read_all_entries(log_file)
+    filled = 0
+    for e in entries:
+        if not (e["year"] == year and e["week"] == week and e["season_type"] == season_type):
+            continue
+        if e.get("total_pick") or e.get("ml_pick_team"):
+            continue
+        extras = upcoming.get((e["home_team"], e["away_team"]))
+        if extras and (extras["total_pick"] or extras["ml_pick_team"]):
+            e.update(extras)
+            filled += 1
+    if filled:
+        with log_file.open("w") as f:
+            for e in entries:
+                f.write(json.dumps(e) + "\n")
+    return filled
 
 
 def load_log(log_file: Path = LOG_FILE) -> pd.DataFrame:
@@ -122,8 +199,11 @@ def load_log(log_file: Path = LOG_FILE) -> pd.DataFrame:
     """
     entries = _read_all_entries(log_file)
     if not entries:
-        return pd.DataFrame(columns=LOG_COLUMNS)
+        return pd.DataFrame(columns=LOG_COLUMNS + EXTRA_COLUMNS)
     df = pd.DataFrame(entries)
+    for col in EXTRA_COLUMNS:
+        if col not in df.columns:
+            df[col] = None
     return (
         df.sort_values("logged_at")
         .drop_duplicates(subset=["year", "week", "season_type", "home_team", "away_team"], keep="first")
@@ -182,6 +262,9 @@ def grade_logged_picks(bearer_token: str, log_file: Path = LOG_FILE) -> pd.DataF
     outcomes = []
     home_points_col = []
     away_points_col = []
+    total_outcomes = []
+    ml_outcomes = []
+    ml_profits = []
     results_cache: dict[tuple, dict] = {}
     for _, row in log_df.iterrows():
         key = (row["year"], row["week"], row["season_type"])
@@ -196,17 +279,28 @@ def grade_logged_picks(bearer_token: str, log_file: Path = LOG_FILE) -> pd.DataF
             outcomes.append(None)
             home_points_col.append(None)
             away_points_col.append(None)
+            total_outcomes.append(None)
+            ml_outcomes.append(None)
+            ml_profits.append(None)
             continue
         home_points, away_points = result
         home_points_col.append(home_points)
         away_points_col.append(away_points)
         outcomes.append(backtest.grade_pick(row["pick_team"], row["home_team"], row["away_team"],
                                              row["market_spread_home"], home_points, away_points))
+        total_outcomes.append(backtest.grade_total(row["total_pick"], row["market_total"],
+                                                    home_points, away_points))
+        ml_outcome = backtest.grade_moneyline(row["ml_pick_team"], row["home_team"], home_points, away_points)
+        ml_outcomes.append(ml_outcome)
+        ml_profits.append(backtest.moneyline_profit(ml_outcome, row["ml_odds"]))
 
     log_df = log_df.copy()
     log_df["home_points"] = home_points_col
     log_df["away_points"] = away_points_col
     log_df["outcome"] = outcomes
+    log_df["total_outcome"] = total_outcomes
+    log_df["ml_outcome"] = ml_outcomes
+    log_df["ml_profit"] = ml_profits
     return log_df
 
 

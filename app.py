@@ -558,6 +558,9 @@ if is_current_slate:
     auto_log_key = f"auto_logged_{year}_{week}_{season_type}"
     if auto_log_key not in st.session_state:
         pick_log.log_picks(df, year, api_week, season_type)  # no-op if already logged
+        # Slates logged before totals/moneylines were tracked: fill those in for games that
+        # haven't kicked off yet (never after — see backfill_extras).
+        pick_log.backfill_extras(df, year, api_week, season_type)
         pick_log.sync_to_github(github_token)  # no-op if GitHub sync isn't configured
         st.session_state[auto_log_key] = True
 
@@ -1417,6 +1420,53 @@ with tab5:
         st.caption(f"Cumulative across {total_slates} logged slate(s){note} — see Record by week below "
                    f"for the per-slate breakdown.")
 
+    if not logged_df.empty:
+        st.markdown("#### Totals & moneyline accuracy")
+        totals_all = backtest.summarize_market(graded_log, "total_outcome")
+        ml_all = backtest.summarize_market(graded_log, "ml_outcome")
+        if totals_all.empty and ml_all.empty:
+            st.caption("No graded totals or moneyline picks yet. These are only recorded for slates "
+                       "logged from now on (older slates were logged spread-only, and can't be filled "
+                       "in after kickoff without hindsight) — they'll show up here once those games finish.")
+        else:
+            def _rec(df_):
+                if df_.empty:
+                    return "—", "—"
+                r = df_.iloc[0]
+                push = f"-{int(r['pushes'])}" if r["pushes"] else ""
+                rate = f"{r['win_rate']:.1%}" if pd.notna(r["win_rate"]) else "—"
+                return f"{int(r['wins'])}-{int(r['losses'])}{push}", rate
+
+            tot_rec, tot_rate = _rec(totals_all)
+            ml_rec, ml_rate = _rec(ml_all)
+            ml_units = graded_log["ml_profit"].dropna().sum() if "ml_profit" in graded_log else 0.0
+            tm1, tm2, tm3 = st.columns(3)
+            tm1.metric("Over/Under Record", tot_rec, tot_rate, delta_color="off")
+            tm2.metric("Moneyline Record", ml_rec, ml_rate, delta_color="off")
+            tm3.metric("Moneyline Units (1u flat)", f"{ml_units:+.2f}")
+            st.caption("Over/under and moneyline picks logged pre-kickoff, graded on final scores. "
+                       "Moneyline win rate alone can mislead (heavy favorites win often but pay little), "
+                       "so units shows profit at the logged price on a flat 1-unit bet.")
+
+            tier_totals = backtest.summarize_market(graded_log, "total_outcome", "total_tier")
+            strong = graded_log[graded_log["ml_edge"].fillna(0) >= model.ML_EDGE_THRESHOLD]
+            ml_strong = backtest.summarize_market(strong, "ml_outcome")
+            bt1, bt2 = st.columns(2)
+            with bt1:
+                if not tier_totals.empty:
+                    st.caption("Over/under by tier")
+                    tier_totals = tier_totals.assign(win_rate=tier_totals["win_rate"] * 100)
+                    st.dataframe(
+                        tier_totals.rename(columns={"total_tier": "Tier", "wins": "W", "losses": "L",
+                                                    "pushes": "P", "win_rate": "Win Rate"}),
+                        use_container_width=True, hide_index=True,
+                        column_config={"Win Rate": st.column_config.NumberColumn(format="%.1f%%")},
+                    )
+            with bt2:
+                if not ml_strong.empty:
+                    s_rec, s_rate = _rec(ml_strong)
+                    st.caption(f"Moneyline, strong edge only (≥{model.ML_EDGE_THRESHOLD:.0%}): {s_rec} ({s_rate})")
+
     if total_n > 0 or not manual_records.empty:
         st.markdown("#### Record by week")
         st.caption("Every logged slate, win/loss record once results are in — 'Pending' means it's "
@@ -1531,10 +1581,27 @@ with tab5:
         slate_games["Result"] = slate_games.apply(_result_str, axis=1)
         slate_games["Outcome"] = slate_games["outcome"].map(lambda o: outcome_labels.get(o, "⏳ Pending"))
 
+        mark = {"win": "✅", "loss": "❌", "push": "🟰"}
+
+        def _total_str(r):
+            if not r["total_pick"] or pd.isna(r["total_pick"]):
+                return ""
+            return f"{r['total_pick'].title()} {r['market_total']:g} {mark.get(r['total_outcome'], '⏳')}"
+
+        def _ml_str(r):
+            if not r["ml_pick_team"] or pd.isna(r["ml_pick_team"]):
+                return ""
+            odds = f" ({r['ml_odds']:+.0f})" if pd.notna(r["ml_odds"]) else ""
+            return f"{r['ml_pick_team']}{odds} {mark.get(r['ml_outcome'], '⏳')}"
+
+        slate_games["Total"] = slate_games.apply(_total_str, axis=1)
+        slate_games["Moneyline"] = slate_games.apply(_ml_str, axis=1)
+
         game_display = slate_games.rename(columns={
             "home_team": "Home", "away_team": "Away",
             "market_spread_home": "Market Spread", "pick_team": "Pick", "tier": "Tier",
-        })[["Home Logo", "Home", "Away Logo", "Away", "Market Spread", "Pick", "Tier", "Result", "Outcome"]]
+        })[["Home Logo", "Home", "Away Logo", "Away", "Market Spread", "Pick", "Tier", "Result", "Outcome",
+            "Total", "Moneyline"]]
 
         def _shade_outcome_row(row):
             return [outcome_row_css(slate_games.loc[row.name, "outcome"])] * len(row)

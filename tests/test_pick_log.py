@@ -75,7 +75,7 @@ def test_load_log_empty_returns_dataframe_with_expected_columns(log_paths):
     _, log_file = log_paths
     df = pick_log.load_log(log_file)
     assert df.empty
-    assert list(df.columns) == pick_log.LOG_COLUMNS
+    assert list(df.columns) == pick_log.LOG_COLUMNS + pick_log.EXTRA_COLUMNS
 
 
 def test_load_log_returns_logged_entries(log_paths):
@@ -403,3 +403,50 @@ def test_sync_from_github_writes_pulled_content(log_paths, monkeypatch):
     assert log_file.exists()
     assert json.loads(log_file.read_text().strip()) == {"year": 2026, "week": 1}
     assert not manual_file.exists()  # fake_get returned None for this one — nothing to write
+
+
+def make_full_picks_df(start="2099-01-01T00:00:00+00:00"):
+    return pd.DataFrame([
+        {"home_team": "Home U", "away_team": "Away U", "market_spread_home": -3.0,
+         "pick_team": "Home U", "model_pick": "HOME (Home U)", "cover_prob": 0.65,
+         "edge_points": 4.0, "tier": "A",
+         "total_pick": "OVER", "market_total": 50.5, "total_cover_prob": 0.6, "total_tier": "B",
+         "ml_pick_team": "Away U", "home_moneyline": -150.0, "away_moneyline": 130.0,
+         "ml_model_prob": 0.5, "ml_edge": 0.07, "start_date": start, "start_time_tbd": False},
+        {"home_team": "Third U", "away_team": "Fourth U", "market_spread_home": 1.0,
+         "pick_team": "Third U", "model_pick": "HOME (Third U)", "cover_prob": 0.55,
+         "edge_points": 1.0, "tier": "C",
+         "total_pick": "NO EDGE", "market_total": 45.0, "total_cover_prob": 0.5, "total_tier": "Pass",
+         "ml_pick_team": "", "home_moneyline": 100.0, "away_moneyline": -120.0,
+         "ml_model_prob": 0.5, "ml_edge": 0.0, "start_date": start, "start_time_tbd": False},
+    ])
+
+
+def test_log_picks_records_total_and_moneyline_fields(log_paths):
+    log_dir, log_file = log_paths
+    pick_log.log_picks(make_full_picks_df(), 2026, 5, "regular", log_dir=log_dir, log_file=log_file)
+    df = pick_log.load_log(log_file).set_index("home_team")
+    assert df.loc["Home U", "total_pick"] == "OVER"
+    assert df.loc["Home U", "market_total"] == 50.5
+    assert df.loc["Home U", "ml_pick_team"] == "Away U"
+    assert df.loc["Home U", "ml_odds"] == 130.0  # price of the picked (away) side
+    assert pd.isna(df.loc["Third U", "total_pick"])  # NO EDGE isn't a pick
+    assert pd.isna(df.loc["Third U", "ml_pick_team"])
+
+
+def test_backfill_extras_fills_only_games_not_yet_started(log_paths):
+    log_dir, log_file = log_paths
+    now = pd.Timestamp("2026-09-26T12:00:00+00:00")
+    full = make_full_picks_df(start="2026-09-26T20:00:00+00:00")
+    spread_only = full[["home_team", "away_team", "market_spread_home", "pick_team", "model_pick",
+                        "cover_prob", "edge_points", "tier"]]  # a slate logged before extras existed
+    pick_log.log_picks(spread_only, 2026, 5, "regular", log_dir=log_dir, log_file=log_file)
+    full.loc[1, "start_date"] = "2026-09-26T08:00:00+00:00"  # already kicked off
+    full.loc[1, "total_pick"] = "OVER"
+
+    assert pick_log.backfill_extras(full, 2026, 5, "regular", log_file=log_file, now=now) == 1
+    df = pick_log.load_log(log_file).set_index("home_team")
+    assert df.loc["Home U", "total_pick"] == "OVER"
+    assert pd.isna(df.loc["Third U", "total_pick"])  # started already, not filled in hindsight
+    # Idempotent: nothing left to fill.
+    assert pick_log.backfill_extras(full, 2026, 5, "regular", log_file=log_file, now=now) == 0
