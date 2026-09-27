@@ -1420,6 +1420,48 @@ with tab5:
         st.caption(f"Cumulative across {total_slates} logged slate(s){note} — see Record by week below "
                    f"for the per-slate breakdown.")
 
+    if total_n > 0 or not manual_records.empty:
+        st.markdown("#### Record by week")
+        st.caption("Every logged slate, win/loss record once results are in — 'Pending' means it's "
+                   "logged but the games haven't finished yet. A row with no real games behind it "
+                   "(marked below) came from a manually-entered record instead.")
+        # Built from logged_df (not logged_weeks()'s list-of-tuples helper) so the merge
+        # key columns share the exact same dtypes as week_record's — both ultimately trace
+        # back to the same load_log() call, avoiding a None-vs-NaN dtype mismatch on the
+        # "week" column (None for postseason) that a fresh tuple-derived DataFrame risks.
+        weeks_display = all_slates.merge(week_record, on=["year", "week", "season_type"], how="left")
+        if not weeks_display.empty:
+            # .apply(axis=1) on an empty DataFrame returns the frame unchanged (not a
+            # Series), which breaks the assignment below — happens here whenever there are
+            # no real logged slates yet and this section is only showing manual records.
+            weeks_display["Record"] = weeks_display.apply(
+                lambda r: f"{int(r['wins'])}-{int(r['losses'])}" if pd.notna(r["wins"]) else "Pending", axis=1,
+            )
+        # Slates with only a remembered total, no real per-game rows at all — these are
+        # never merged into a real slate's numbers (that would double-count if the real
+        # log ever catches up), they're additional rows of their own.
+        manual_only_rows = pd.DataFrame()
+        if not manual_records.empty:
+            existing_keys = set(zip(all_slates["year"], all_slates["week"], all_slates["season_type"]))
+            manual_only_rows = manual_records[
+                ~manual_records.apply(lambda r: (r["year"], r["week"], r["season_type"]) in existing_keys, axis=1)
+            ].copy()
+            manual_only_rows["Record"] = (
+                manual_only_rows["wins"].astype(str) + "-" + manual_only_rows["losses"].astype(str) + " *"
+            )
+            manual_only_rows["win_rate"] = manual_only_rows["wins"] / (manual_only_rows["wins"] + manual_only_rows["losses"])
+            weeks_display = pd.concat([weeks_display, manual_only_rows], ignore_index=True)
+        weeks_display = weeks_display.sort_values(["year", "week"], na_position="first").rename(
+            columns={"year": "Year", "week": "Week", "season_type": "Season Type", "win_rate": "Win Rate"}
+        )
+        st.dataframe(
+            weeks_display[["Year", "Week", "Season Type", "Record", "Win Rate"]],
+            use_container_width=True, hide_index=True,
+            column_config={"Win Rate": st.column_config.ProgressColumn("Win Rate", min_value=0.0, max_value=1.0)},
+        )
+        if not manual_only_rows.empty:
+            st.caption("\\* Manually recorded — no per-game detail, so it won't appear in Game-by-game results.")
+
     if not logged_df.empty:
         st.markdown("#### Totals & moneyline accuracy")
         totals_all = backtest.summarize_market(graded_log, "total_outcome")
@@ -1466,48 +1508,6 @@ with tab5:
                 if not ml_strong.empty:
                     s_rec, s_rate = _rec(ml_strong)
                     st.caption(f"Moneyline, strong edge only (≥{model.ML_EDGE_THRESHOLD:.0%}): {s_rec} ({s_rate})")
-
-    if total_n > 0 or not manual_records.empty:
-        st.markdown("#### Record by week")
-        st.caption("Every logged slate, win/loss record once results are in — 'Pending' means it's "
-                   "logged but the games haven't finished yet. A row with no real games behind it "
-                   "(marked below) came from a manually-entered record instead.")
-        # Built from logged_df (not logged_weeks()'s list-of-tuples helper) so the merge
-        # key columns share the exact same dtypes as week_record's — both ultimately trace
-        # back to the same load_log() call, avoiding a None-vs-NaN dtype mismatch on the
-        # "week" column (None for postseason) that a fresh tuple-derived DataFrame risks.
-        weeks_display = all_slates.merge(week_record, on=["year", "week", "season_type"], how="left")
-        if not weeks_display.empty:
-            # .apply(axis=1) on an empty DataFrame returns the frame unchanged (not a
-            # Series), which breaks the assignment below — happens here whenever there are
-            # no real logged slates yet and this section is only showing manual records.
-            weeks_display["Record"] = weeks_display.apply(
-                lambda r: f"{int(r['wins'])}-{int(r['losses'])}" if pd.notna(r["wins"]) else "Pending", axis=1,
-            )
-        # Slates with only a remembered total, no real per-game rows at all — these are
-        # never merged into a real slate's numbers (that would double-count if the real
-        # log ever catches up), they're additional rows of their own.
-        manual_only_rows = pd.DataFrame()
-        if not manual_records.empty:
-            existing_keys = set(zip(all_slates["year"], all_slates["week"], all_slates["season_type"]))
-            manual_only_rows = manual_records[
-                ~manual_records.apply(lambda r: (r["year"], r["week"], r["season_type"]) in existing_keys, axis=1)
-            ].copy()
-            manual_only_rows["Record"] = (
-                manual_only_rows["wins"].astype(str) + "-" + manual_only_rows["losses"].astype(str) + " *"
-            )
-            manual_only_rows["win_rate"] = manual_only_rows["wins"] / (manual_only_rows["wins"] + manual_only_rows["losses"])
-            weeks_display = pd.concat([weeks_display, manual_only_rows], ignore_index=True)
-        weeks_display = weeks_display.sort_values(["year", "week"], na_position="first").rename(
-            columns={"year": "Year", "week": "Week", "season_type": "Season Type", "win_rate": "Win Rate"}
-        )
-        st.dataframe(
-            weeks_display[["Year", "Week", "Season Type", "Record", "Win Rate"]],
-            use_container_width=True, hide_index=True,
-            column_config={"Win Rate": st.column_config.ProgressColumn("Win Rate", min_value=0.0, max_value=1.0)},
-        )
-        if not manual_only_rows.empty:
-            st.caption("\\* Manually recorded — no per-game detail, so it won't appear in Game-by-game results.")
 
     with st.expander("➕ Record a remembered result for a slate with no per-game detail"):
         st.caption("For a slate whose logged picks were lost (e.g. to a disk reset) before anyone "
