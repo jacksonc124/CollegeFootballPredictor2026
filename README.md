@@ -39,6 +39,21 @@ You'll also need a CFBD API bearer token (get one at [collegefootballdata.com](h
 BEARER_TOKEN = "your-token-here"
 ```
 
+### Optional: persistent pick log (Supabase)
+
+The pick log (`pick_log.py`) normally lives only on local disk, which a Streamlit Cloud
+redeploy wipes. To make it survive redeploys, create a free project at
+[supabase.com](https://supabase.com), run `supabase/schema.sql` once in that project's SQL
+Editor, then add these secrets:
+
+```toml
+SUPABASE_URL = "https://your-project-ref.supabase.co"
+SUPABASE_KEY = "your-service-role-key"   # Settings -> API -> service_role key
+```
+
+Absent entirely, the app works exactly as before (local-disk-only). See pick_log.py's
+`sync_from_supabase`/`sync_to_supabase` for how this is used.
+
 Run the dashboard with:
 
 ```bash

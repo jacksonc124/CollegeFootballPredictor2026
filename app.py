@@ -287,18 +287,20 @@ try:
 except Exception:
     bearer_token = os.environ.get("BEARER_TOKEN", "")
 
-# Optional: a GitHub PAT (repo scope) lets the pick log survive a Streamlit Cloud redeploy
-# by syncing it to a dedicated branch instead of only local disk (see pick_log.py's
-# sync_from_github/sync_to_github). Absent entirely if never configured — the log just
+# Optional: a Supabase project lets the pick log survive a Streamlit Cloud redeploy by
+# syncing it to a real external database instead of only local disk (see pick_log.py's
+# sync_from_supabase/sync_to_supabase). Absent entirely if never configured — the log just
 # stays local-disk-only, wiped on redeploy, same as before this existed.
 try:
-    github_token = st.secrets["GITHUB_TOKEN"]
+    supabase_url = st.secrets["SUPABASE_URL"]
+    supabase_key = st.secrets["SUPABASE_KEY"]
 except Exception:
-    github_token = os.environ.get("GITHUB_TOKEN", "")
+    supabase_url = os.environ.get("SUPABASE_URL", "")
+    supabase_key = os.environ.get("SUPABASE_KEY", "")
 
-if github_token and "github_synced" not in st.session_state:
-    pick_log.sync_from_github(github_token)
-    st.session_state["github_synced"] = True
+if supabase_url and supabase_key and "supabase_synced" not in st.session_state:
+    pick_log.sync_from_supabase(supabase_url, supabase_key)
+    st.session_state["supabase_synced"] = True
 
 
 @st.cache_data(show_spinner=False, ttl=86400)
@@ -561,7 +563,7 @@ if is_current_slate:
         # Slates logged before totals/moneylines were tracked: fill those in for games that
         # haven't kicked off yet (never after — see backfill_extras).
         pick_log.backfill_extras(df, year, api_week, season_type)
-        pick_log.sync_to_github(github_token)  # no-op if GitHub sync isn't configured
+        pick_log.sync_to_supabase(supabase_url, supabase_key)  # no-op if Supabase sync isn't configured
         st.session_state[auto_log_key] = True
 
 # Applied after auto-logging (above), not before — the pick log is meant to be a complete
@@ -864,7 +866,7 @@ with tab1:
         if not pick_log.already_logged(year, api_week, season_type):
             if st.button("📌 Log Picks", key="log_picks_btn", use_container_width=True, type="primary"):
                 pick_log.log_picks(df, year, api_week, season_type)
-                pick_log.sync_to_github(github_token)
+                pick_log.sync_to_supabase(supabase_url, supabase_key)
                 st.rerun()
     st.markdown("---")
 
@@ -1534,14 +1536,14 @@ with tab5:
             if st.button("Save remembered record", key="save_manual_record"):
                 pick_log.add_manual_record(int(manual_year), manual_week_val, manual_season_type,
                                             int(manual_wins_in), int(manual_losses_in))
-                pick_log.sync_to_github(github_token)
+                pick_log.sync_to_supabase(supabase_url, supabase_key)
                 st.success(f"Saved {manual_wins_in}-{manual_losses_in} for {int(manual_year)} "
                            f"{'Postseason' if manual_postseason else f'Week {manual_week}'}.")
                 st.rerun()
         with del_col:
             if st.button("Remove this slate's remembered record", key="delete_manual_record"):
                 pick_log.delete_manual_record(int(manual_year), manual_week_val, manual_season_type)
-                pick_log.sync_to_github(github_token)
+                pick_log.sync_to_supabase(supabase_url, supabase_key)
                 st.rerun()
         if not manual_records.empty:
             st.caption("Currently recorded: " + ", ".join(
@@ -1631,14 +1633,14 @@ with tab5:
         return df, None
 
     st.markdown("#### Backup / restore log")
-    if github_token:
-        st.caption("✅ Auto-syncing to a private GitHub branch — this log survives a redeploy. "
+    if supabase_url and supabase_key:
+        st.caption("✅ Auto-syncing to Supabase — this log survives a redeploy. "
                    "The controls below still work the same for manual backups or a full restore.")
     else:
-        st.caption("⚠️ This log lives on the app's local disk and is **not** committed to git — a "
+        st.caption("⚠️ This log lives on the app's local disk and is **not** persisted externally — a "
                    "redeploy pulls a fresh container and wipes it. Download periodically to keep a "
-                   "permanent record, and restore after a reset. Add a GITHUB_TOKEN secret to make "
-                   "this automatic instead.")
+                   "permanent record, and restore after a reset. Add SUPABASE_URL/SUPABASE_KEY secrets "
+                   "to make this automatic instead.")
     bk_col1, bk_col2, bk_col3 = st.columns(3)
     with bk_col1:
         st.download_button("⬇️ Download Log (CSV)", data=logged_df.to_csv(index=False),
@@ -1654,7 +1656,7 @@ with tab5:
                 st.error(f"Couldn't replace the log: {error}")
             else:
                 pick_log.restore_log(restored_df)
-                pick_log.sync_to_github(github_token)
+                pick_log.sync_to_supabase(supabase_url, supabase_key)
                 st.success("Log replaced — reload the page to see it reflected.")
     with bk_col3:
         uploaded_merge = st.file_uploader("⬆️ Merge Log (CSV)", type="csv", key="merge_log_upload",
@@ -1669,7 +1671,7 @@ with tab5:
                 st.error(f"Couldn't merge the log: {error}")
             else:
                 pick_log.merge_log(merge_df)
-                pick_log.sync_to_github(github_token)
+                pick_log.sync_to_supabase(supabase_url, supabase_key)
                 st.success("Log merged — reload the page to see it reflected.")
 
     st.markdown("---")

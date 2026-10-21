@@ -306,99 +306,116 @@ def test_delete_manual_record_is_a_noop_when_nothing_matches(log_paths):
     assert pick_log.load_manual_records(manual_file).empty
 
 
-def test_sync_from_github_noop_without_a_token(log_paths, monkeypatch):
+def test_sync_from_supabase_noop_without_credentials(log_paths, monkeypatch):
     log_dir, log_file = log_paths
     manual_file = log_dir / "manual_records.jsonl"
 
     def fail_if_called(*a, **k):
-        raise AssertionError("should never touch the network without a token")
-    monkeypatch.setattr(pick_log, "_github_get_file", fail_if_called)
+        raise AssertionError("should never touch the network without credentials")
+    monkeypatch.setattr(pick_log, "_supabase_get_file", fail_if_called)
 
-    pick_log.sync_from_github("", log_dir=log_dir, log_file=log_file, manual_file=manual_file)
+    pick_log.sync_from_supabase("", "", log_dir=log_dir, log_file=log_file, manual_file=manual_file)
     # No exception, and nothing written — a true no-op, not a failed sync.
     assert not log_file.exists()
 
+    # Also a no-op with only one of the two set (url without key, or vice versa).
+    pick_log.sync_from_supabase("https://x.supabase.co", "", log_dir=log_dir, log_file=log_file,
+                                 manual_file=manual_file)
+    assert not log_file.exists()
 
-def test_sync_to_github_noop_without_a_token(log_paths, monkeypatch):
+
+def test_sync_to_supabase_noop_without_credentials(log_paths, monkeypatch):
     log_dir, log_file = log_paths
     manual_file = log_dir / "manual_records.jsonl"
     pick_log.log_picks(make_picks_df(), 2026, 1, "regular", log_dir=log_dir, log_file=log_file)
 
     def fail_if_called(*a, **k):
-        raise AssertionError("should never touch the network without a token")
-    monkeypatch.setattr(pick_log, "_github_put_file", fail_if_called)
+        raise AssertionError("should never touch the network without credentials")
+    monkeypatch.setattr(pick_log, "_supabase_put_file", fail_if_called)
 
-    pick_log.sync_to_github("", log_dir=log_dir, log_file=log_file, manual_file=manual_file)  # should not raise
+    pick_log.sync_to_supabase("", "", log_dir=log_dir, log_file=log_file,
+                               manual_file=manual_file)  # should not raise
 
 
-def test_sync_to_github_swallows_failures(log_paths, monkeypatch):
+def test_sync_to_supabase_swallows_failures(log_paths, monkeypatch):
     log_dir, log_file = log_paths
     manual_file = log_dir / "manual_records.jsonl"
     pick_log.log_picks(make_picks_df(), 2026, 1, "regular", log_dir=log_dir, log_file=log_file)
 
     def boom(*a, **k):
         raise RuntimeError("network is down")
-    monkeypatch.setattr(pick_log, "_github_put_file", boom)
+    monkeypatch.setattr(pick_log, "_supabase_put_file", boom)
 
-    pick_log.sync_to_github("fake-token", log_dir=log_dir, log_file=log_file, manual_file=manual_file)  # no raise
+    pick_log.sync_to_supabase("https://x.supabase.co", "fake-key", log_dir=log_dir, log_file=log_file,
+                               manual_file=manual_file)  # no raise
 
 
-def test_sync_from_github_swallows_failures(log_paths, monkeypatch):
+def test_sync_from_supabase_swallows_failures(log_paths, monkeypatch):
     log_dir, log_file = log_paths
     manual_file = log_dir / "manual_records.jsonl"
 
     def boom(*a, **k):
         raise RuntimeError("network is down")
-    monkeypatch.setattr(pick_log, "_github_get_file", boom)
+    monkeypatch.setattr(pick_log, "_supabase_get_file", boom)
 
-    pick_log.sync_from_github("fake-token", log_dir=log_dir, log_file=log_file, manual_file=manual_file)  # no raise
+    pick_log.sync_from_supabase("https://x.supabase.co", "fake-key", log_dir=log_dir, log_file=log_file,
+                                 manual_file=manual_file)  # no raise
     assert not log_file.exists()  # nothing pulled, but no crash
 
 
 class _FakeResponse:
-    def __init__(self, status_code):
+    def __init__(self, status_code, payload=None):
         self.status_code = status_code
+        self._payload = payload if payload is not None else []
 
     def raise_for_status(self):
         if self.status_code >= 400:
             raise requests.exceptions.HTTPError(f"{self.status_code} error")
 
+    def json(self):
+        return self._payload
 
-def test_github_put_file_retries_once_on_conflict(monkeypatch):
-    shas = iter(["sha-old", "sha-new"])
-    monkeypatch.setattr(pick_log, "_github_get_file", lambda path, token: (None, next(shas)))
 
-    responses = iter([_FakeResponse(409), _FakeResponse(200)])
+def test_supabase_get_file_returns_none_when_absent(monkeypatch):
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _FakeResponse(200, []))
+    assert pick_log._supabase_get_file("pick_log/logged_picks.jsonl", "https://x.supabase.co", "fake-key") is None
+
+
+def test_supabase_get_file_returns_content_when_present(monkeypatch):
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _FakeResponse(200, [{"content": "hello"}]))
+    content = pick_log._supabase_get_file("pick_log/logged_picks.jsonl", "https://x.supabase.co", "fake-key")
+    assert content == "hello"
+
+
+def test_supabase_put_file_upserts_with_merge_duplicates_header(monkeypatch):
     calls = []
 
-    def fake_put(url, json, headers, timeout):
-        calls.append(json["sha"])
-        return next(responses)
-    monkeypatch.setattr(requests, "put", fake_put)
+    def fake_post(url, json, headers, timeout):
+        calls.append((json, headers.get("Prefer")))
+        return _FakeResponse(201)
+    monkeypatch.setattr(requests, "post", fake_post)
 
-    pick_log._github_put_file("pick_log/logged_picks.jsonl", "content", "fake-token", "msg")  # no raise
-    assert calls == ["sha-old", "sha-new"]
+    pick_log._supabase_put_file("pick_log/logged_picks.jsonl", "content", "https://x.supabase.co", "fake-key")
 
-
-def test_github_put_file_raises_after_exhausting_retries(monkeypatch):
-    monkeypatch.setattr(pick_log, "_github_get_file", lambda path, token: (None, "sha-stale"))
-    monkeypatch.setattr(requests, "put", lambda *a, **k: _FakeResponse(409))
-
-    with pytest.raises(requests.exceptions.HTTPError):
-        pick_log._github_put_file("pick_log/logged_picks.jsonl", "content", "fake-token", "msg", _retries=2)
+    assert len(calls) == 1
+    payload, prefer = calls[0]
+    assert payload["path"] == "pick_log/logged_picks.jsonl"
+    assert payload["content"] == "content"
+    assert prefer == "resolution=merge-duplicates"
 
 
-def test_sync_from_github_writes_pulled_content(log_paths, monkeypatch):
+def test_sync_from_supabase_writes_pulled_content(log_paths, monkeypatch):
     log_dir, log_file = log_paths
     manual_file = log_dir / "manual_records.jsonl"
 
-    def fake_get(path, token):
+    def fake_get(path, url, key):
         if path.endswith("logged_picks.jsonl"):
-            return '{"year": 2026, "week": 1}\n', "sha1"
-        return None, None
-    monkeypatch.setattr(pick_log, "_github_get_file", fake_get)
+            return '{"year": 2026, "week": 1}\n'
+        return None
+    monkeypatch.setattr(pick_log, "_supabase_get_file", fake_get)
 
-    pick_log.sync_from_github("fake-token", log_dir=log_dir, log_file=log_file, manual_file=manual_file)
+    pick_log.sync_from_supabase("https://x.supabase.co", "fake-key", log_dir=log_dir, log_file=log_file,
+                                 manual_file=manual_file)
 
     assert log_file.exists()
     assert json.loads(log_file.read_text().strip()) == {"year": 2026, "week": 1}
