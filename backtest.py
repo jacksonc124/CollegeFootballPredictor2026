@@ -123,6 +123,43 @@ def grade_moneyline(ml_pick_team: str | None, home_team: str, home_points: int, 
     return "win" if (ml_pick_team == home_team) == home_won else "loss"
 
 
+def clv_points(pick_team: str | None, home_team: str, logged_spread_home: float | None,
+                closing_spread_home: float | None) -> float | None:
+    """
+    Closing Line Value, in points, from the bettor's side of the pick — positive means the
+    logged (pre-game) number was better than where the market closed, i.e. real edge beyond
+    just winning or losing a single game. This is the standard sharp-betting signal for "is
+    the model actually sharper than the market", since win rate alone is noisy over a season
+    but consistently beating the closing line is not.
+
+    Both spreads follow CFBD convention (home POV, negative = home favored). None if either
+    number is missing (not yet captured — see capture_closing_lines) or there was no pick.
+    """
+    if not pick_team or logged_spread_home is None or closing_spread_home is None:
+        return None
+    if pd.isna(logged_spread_home) or pd.isna(closing_spread_home):
+        return None
+    diff = logged_spread_home - closing_spread_home
+    return diff if pick_team == home_team else -diff
+
+
+def summarize_clv(graded: pd.DataFrame) -> dict:
+    """Average CLV and the share of picks with positive CLV, across every pick with a
+    captured closing line (older picks logged before CLV tracking existed have none, and
+    are excluded here rather than counted as zero)."""
+    if "clv_points" not in graded.columns:
+        return {"n": 0, "avg_clv": None, "positive_rate": None}
+    decided = graded[graded["clv_points"].notna()]
+    n = len(decided)
+    if n == 0:
+        return {"n": 0, "avg_clv": None, "positive_rate": None}
+    return {
+        "n": n,
+        "avg_clv": float(decided["clv_points"].mean()),
+        "positive_rate": float((decided["clv_points"] > 0).mean()),
+    }
+
+
 def moneyline_profit(outcome: str | None, odds: float | None) -> float | None:
     """Units won/lost on a flat 1-unit moneyline bet: +odds/100 or +100/|odds| on a win,
     -1 on a loss, 0 on a push. None if ungraded or the price wasn't recorded."""

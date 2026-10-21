@@ -2,6 +2,7 @@ import json
 import time
 
 import pandas as pd
+import pytest
 
 from backtest import get_actual_results, grade_pick, overall_accuracy, summarize_by_tier, summarize_by_week
 
@@ -119,6 +120,51 @@ def test_moneyline_profit():
     assert moneyline_profit("push", 150) == 0.0
     assert moneyline_profit(None, 150) is None
     assert moneyline_profit("win", None) is None
+
+
+def test_clv_points_home_pick_positive_when_line_moved_toward_home():
+    from backtest import clv_points
+    # Bet home at -3 (home favored by 3); closed at -5 (home favored by 5) — you laid
+    # fewer points than the closer by betting early, i.e. positive CLV.
+    assert clv_points("Home U", "Home U", -3.0, -5.0) == 2.0
+
+
+def test_clv_points_home_pick_negative_when_line_moved_away_from_home():
+    from backtest import clv_points
+    # Bet home at -7, closed at -3 — you laid more points than you'd have to at the close.
+    assert clv_points("Home U", "Home U", -7.0, -3.0) == -4.0
+
+
+def test_clv_points_away_pick_mirrors_home():
+    from backtest import clv_points
+    # Bet away at home-line -3 (away +3); closed at home-line -1 (away +1) — the away number
+    # shrank, so betting early got 2 more points than the close: positive CLV.
+    assert clv_points("Away U", "Home U", -3.0, -1.0) == 2.0
+
+
+def test_clv_points_none_when_missing_inputs():
+    from backtest import clv_points
+    assert clv_points("", "Home U", -3.0, -5.0) is None
+    assert clv_points("Home U", "Home U", None, -5.0) is None
+    assert clv_points("Home U", "Home U", -3.0, None) is None
+    assert clv_points("Home U", "Home U", -3.0, float("nan")) is None
+
+
+def test_summarize_clv_averages_and_positive_rate():
+    from backtest import summarize_clv
+    graded = pd.DataFrame([
+        {"clv_points": 2.0}, {"clv_points": -1.0}, {"clv_points": 3.0}, {"clv_points": None},
+    ])
+    summary = summarize_clv(graded)
+    assert summary["n"] == 3  # the None row is excluded, not counted as zero
+    assert summary["avg_clv"] == pytest.approx((2.0 - 1.0 + 3.0) / 3)
+    assert summary["positive_rate"] == pytest.approx(2 / 3)
+
+
+def test_summarize_clv_no_column_or_no_data():
+    from backtest import summarize_clv
+    assert summarize_clv(pd.DataFrame([{"outcome": "win"}])) == {"n": 0, "avg_clv": None, "positive_rate": None}
+    assert summarize_clv(pd.DataFrame([{"clv_points": None}])) == {"n": 0, "avg_clv": None, "positive_rate": None}
 
 
 def test_summarize_market_by_group():

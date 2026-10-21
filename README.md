@@ -54,6 +54,18 @@ SUPABASE_KEY = "your-service-role-key"   # Settings -> API -> service_role key
 Absent entirely, the app works exactly as before (local-disk-only). See pick_log.py's
 `sync_from_supabase`/`sync_to_supabase` for how this is used.
 
+### Optional: Closing Line Value (CLV) tracking
+
+Requires the Supabase setup above (there'd be nothing to update otherwise). A scheduled
+GitHub Action (`.github/workflows/capture_closing_lines.yml`, runs every 30 minutes) records
+each logged pick's closing market spread, so the Model Accuracy tab can show whether the
+model's picks actually beat the market's closing number — a stronger signal than win rate
+alone. To enable it, add these as **repository secrets** (Settings → Secrets and variables →
+Actions — separate from the Streamlit secrets above, since this runs outside Streamlit):
+
+- `BEARER_TOKEN` (same CFBD token)
+- `SUPABASE_URL` / `SUPABASE_KEY` (same Supabase project)
+
 Run the dashboard with:
 
 ```bash

@@ -1511,6 +1511,22 @@ with tab5:
                     s_rec, s_rate = _rec(ml_strong)
                     st.caption(f"Moneyline, strong edge only (≥{model.ML_EDGE_THRESHOLD:.0%}): {s_rec} ({s_rate})")
 
+        st.markdown("#### Closing Line Value (CLV)")
+        st.caption("Did the logged spread beat where the market actually closed? This is the standard "
+                   "sharp-betting signal for real edge — win rate alone is noisy over a season, but "
+                   "consistently beating the close isn't. Only covers picks logged after CLV tracking "
+                   "was added and whose game's closing line was actually captured pre-kickoff (see the "
+                   "scheduled capture_closing_lines job) — older picks show no CLV, not zero CLV.")
+        clv_summary = backtest.summarize_clv(graded_log)
+        if clv_summary["n"] == 0:
+            st.caption("No picks with a captured closing line yet.")
+        else:
+            cv1, cv2 = st.columns(2)
+            cv1.metric("Avg CLV", f"{clv_summary['avg_clv']:+.2f} pts", help="Positive means the logged "
+                       "number was better, on average, than where the line closed.")
+            cv2.metric("Beat the Close", f"{clv_summary['positive_rate']:.1%}",
+                      help=f"Share of {clv_summary['n']} picks with positive CLV.")
+
     with st.expander("➕ Record a remembered result for a slate with no per-game detail"):
         st.caption("For a slate whose logged picks were lost (e.g. to a disk reset) before anyone "
                    "backed them up. This is saved on the server alongside the log itself, so — "

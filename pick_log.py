@@ -188,6 +188,69 @@ def backfill_extras(df: pd.DataFrame, year: int, week: int | None, season_type: 
     return filled
 
 
+def capture_closing_lines(bearer_token: str, log_file: Path = LOG_FILE,
+                          now: pd.Timestamp | None = None) -> int:
+    """
+    Record each logged pick's closing line (the market spread shortly before kickoff) in
+    closing_spread_home — the standard "did the model actually beat the market" signal (see
+    backtest.clv_points). Meant to run on a schedule close to kickoff (see
+    .github/workflows/capture_closing_lines.yml): re-fetches the current market spread for
+    every (year, week, season_type) slate present in the log and overwrites
+    closing_spread_home on every call *while the game is still ahead of kickoff* — so the
+    last run before a game starts is what sticks (the true closing number). Stops updating a
+    game once kickoff has passed, so an in-game/stale number is never mistaken for the close.
+    A game whose kickoff time is unknown (TBD) is skipped entirely, same reasoning as
+    backfill_extras. Returns how many rows were updated this run; rewrites the file only if
+    that's > 0.
+    """
+    import model
+
+    if not log_file.exists():
+        return 0
+    now = now if now is not None else pd.Timestamp.now(tz="UTC")
+    entries = _read_all_entries(log_file)
+    if not entries:
+        return 0
+
+    slates = sorted({(e["year"], e["week"], e["season_type"]) for e in entries})
+    updated = 0
+    for year, week, season_type in slates:
+        try:
+            game_info = model.get_game_info(bearer_token, year, week, season_type)
+            lines = model.get_weekly_lines(bearer_token, year, week, season_type)
+        except Exception as ex:
+            print(f"Warning: failed to fetch lines for {year} wk{week} ({season_type}) for CLV capture: {ex}")
+            continue
+
+        current_spread = {}
+        for g in lines:
+            line = model.pick_line(g, model.DEFAULT_PROVIDER)
+            if line and line.get("spread") is not None:
+                current_spread[(g["home_team"], g["away_team"])] = float(line["spread"])
+
+        for e in entries:
+            if not (e["year"] == year and e["week"] == week and e["season_type"] == season_type):
+                continue
+            key = (e["home_team"], e["away_team"])
+            info = game_info.get(key)
+            start = info.get("start_date") if info else None
+            if not start or (info and info.get("start_time_tbd")):
+                continue
+            if pd.Timestamp(start) <= now:
+                continue  # already kicked off — don't overwrite with a stale/live number
+            spread = current_spread.get(key)
+            if spread is None or e.get("closing_spread_home") == spread:
+                continue
+            e["closing_spread_home"] = spread
+            updated += 1
+
+    if updated:
+        with log_file.open("w") as f:
+            for e in entries:
+                f.write(json.dumps(e) + "\n")
+    return updated
+
+
 def load_log(log_file: Path = LOG_FILE) -> pd.DataFrame:
     """
     Load the full pick log as a DataFrame (empty with LOG_COLUMNS if nothing logged yet).
@@ -303,6 +366,14 @@ def grade_logged_picks(bearer_token: str, log_file: Path = LOG_FILE) -> pd.DataF
     log_df["total_outcome"] = total_outcomes
     log_df["ml_outcome"] = ml_outcomes
     log_df["ml_profit"] = ml_profits
+    # Unlike outcome/total_outcome/ml_outcome above, this doesn't need the game to be
+    # finished — closing_spread_home is captured pre-kickoff (see capture_closing_lines),
+    # so CLV is known as soon as that capture has run, independent of the results loop above.
+    log_df["clv_points"] = log_df.apply(
+        lambda r: backtest.clv_points(r["pick_team"], r["home_team"], r["market_spread_home"],
+                                       r.get("closing_spread_home")),
+        axis=1,
+    )
     return log_df
 
 
