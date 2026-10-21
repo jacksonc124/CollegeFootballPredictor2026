@@ -3,9 +3,69 @@
 import pandas as pd
 import streamlit as st
 
+import cbs_pickem
 import model
 import pick_log
 from ui_helpers import ACCENT, DISPLAY_COLUMNS, TIER_COLORS, tier_row_css
+
+
+def _render_cbs_pool_section(ctx):
+    """
+    Filters the ranked Top 12 down to only the games actually in this user's CBS Sports
+    Pick'em pool — CBS's pool is usually a subset of the week's full slate (e.g. 17 of
+    ~60 games), not every game, so the full-slate Top 12 above can include picks that
+    aren't even an option in the real pool. See cbs_pickem.py: this is an unofficial
+    integration built from a captured request, not CBS's documented API.
+    """
+    st.markdown("### 🔒 My CBS Pool")
+    if not ctx.cbs_configured:
+        st.caption("Not set up yet — add CBS_COOKIE, CBS_POOL_ID, and CBS_ENTRY_ID secrets "
+                   "to filter the list above down to only games actually in your CBS pool. "
+                   "See the README for how to get these from your browser.")
+        return
+
+    try:
+        with st.spinner("Fetching your CBS pool's games…"):
+            pool_games = ctx.get_cbs_pool_games()
+    except Exception as e:
+        st.error(f"Couldn't fetch your CBS pool ({e}). Your session cookie may have "
+                 "expired — see the README for how to grab a fresh one.")
+        return
+
+    if not pool_games:
+        st.info("CBS returned no games for this pool's current period.")
+        return
+
+    known_team_names = set(ctx.logos.keys())
+    matched_df, unmatched = cbs_pickem.match_pool_games_to_df(pool_games, ctx.df, known_team_names)
+    week_number = next((g["week_number"] for g in pool_games if g.get("week_number")), None)
+    week_str = f" · Week {week_number}" if week_number else ""
+    st.caption(f"{len(pool_games)} game(s) in your pool{week_str} · "
+               f"{len(matched_df)} matched to this slate's model picks.")
+
+    if matched_df.empty:
+        st.warning("None of your pool's games matched this slate — try a different "
+                   "Year/Week in the sidebar to match your pool's actual week.")
+    else:
+        top_pool = matched_df[matched_df["tier"] != "Pass"].sort_values(
+            "cover_prob", ascending=False
+        ).reset_index(drop=True)
+        display = top_pool.rename(columns=DISPLAY_COLUMNS)[
+            ["Home", "Away", "Market Spread", "Pick", "Cover Prob", "Edge (pts)", "Tier"]
+        ]
+        st.dataframe(
+            display, use_container_width=True, hide_index=True,
+            column_config={
+                "Cover Prob": st.column_config.ProgressColumn("Cover Prob", min_value=0.0, max_value=1.0),
+                "Edge (pts)": st.column_config.NumberColumn("Edge (pts)", format="%+.1f"),
+                "Market Spread": st.column_config.NumberColumn("Market Spread", format="%+.1f"),
+            },
+        )
+
+    if unmatched:
+        with st.expander(f"⚠️ {len(unmatched)} pool game(s) couldn't be matched — check manually"):
+            for g in unmatched:
+                st.caption(f"{g.get('away_team') or '?'} @ {g.get('home_team') or '?'}")
 
 
 def render(ctx):
@@ -93,6 +153,9 @@ def render(ctx):
             )
         cards_html += "</div>"
         st.markdown(cards_html, unsafe_allow_html=True)
+
+    st.markdown("---")
+    _render_cbs_pool_section(ctx)
 
     st.markdown("---")
     st.markdown("## 📋 All Games")
