@@ -1,0 +1,26 @@
+name: Capture closing lines
+
+# Runs every 30 minutes so a pick's closing_spread_home (see pick_log.capture_closing_lines)
+# reflects the market shortly before kickoff, not just whenever someone happens to load the
+# Streamlit app. Safe to run when nothing's close to kickoff — it just re-saves the same
+# numbers (0 rows updated) until a game is actually within capture_closing_lines' pre-kickoff
+# window.
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python scripts/capture_closing_lines.py
+        env:
+          BEARER_TOKEN: ${{ secrets.BEARER_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}

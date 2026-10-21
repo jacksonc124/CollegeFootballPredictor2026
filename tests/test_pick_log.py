@@ -194,6 +194,26 @@ def test_grade_logged_picks_empty_log_returns_empty(log_paths):
     assert result.empty
 
 
+def test_grade_logged_picks_computes_clv_independent_of_game_result(log_paths, monkeypatch):
+    # CLV only needs closing_spread_home (captured pre-kickoff) — it shouldn't depend on
+    # whether the game has a final score yet.
+    log_dir, log_file = log_paths
+    pick_log.log_picks(make_picks_df(), 2026, 3, "regular", log_dir=log_dir, log_file=log_file)
+    entries = pick_log._read_all_entries(log_file)
+    entries[0]["closing_spread_home"] = -5.0  # logged at -3.0 in make_picks_df
+    with log_file.open("w") as f:
+        for e in entries:
+            f.write(json.dumps(e) + "\n")
+
+    import backtest
+    monkeypatch.setattr(backtest, "get_actual_results", lambda *a, **k: {})  # game not final yet
+
+    graded = pick_log.grade_logged_picks("fake-token", log_file=log_file)
+
+    assert graded.iloc[0]["outcome"] is None  # no result yet
+    assert graded.iloc[0]["clv_points"] == 2.0  # home pick, -3.0 logged vs -5.0 close
+
+
 def test_summarize_by_week_groups_by_year_week_and_season_type():
     graded = pd.DataFrame([
         {"year": 2025, "week": 3, "season_type": "regular", "outcome": "win"},
@@ -449,6 +469,112 @@ def test_log_picks_records_total_and_moneyline_fields(log_paths):
     assert df.loc["Home U", "ml_odds"] == 130.0  # price of the picked (away) side
     assert pd.isna(df.loc["Third U", "total_pick"])  # NO EDGE isn't a pick
     assert pd.isna(df.loc["Third U", "ml_pick_team"])
+
+
+class _FakeModel:
+    """Stand-in for the `model` module capture_closing_lines imports locally — avoids
+    needing the real cfbd SDK/network access to test the capture logic."""
+
+    DEFAULT_PROVIDER = "consensus"
+
+    def __init__(self, game_info, lines):
+        self._game_info = game_info
+        self._lines = lines
+
+    def get_game_info(self, bearer_token, year, week, season_type):
+        return self._game_info
+
+    def get_weekly_lines(self, bearer_token, year, week, season_type):
+        return self._lines
+
+    @staticmethod
+    def pick_line(game, provider_preference):
+        lines = game.get("lines") or []
+        return lines[0] if lines else None
+
+
+def _install_fake_model(monkeypatch, game_info, lines):
+    import sys
+    fake = _FakeModel(game_info, lines)
+    monkeypatch.setitem(sys.modules, "model", fake)
+    return fake
+
+
+def test_capture_closing_lines_updates_upcoming_game_not_yet_started(log_paths, monkeypatch):
+    log_dir, log_file = log_paths
+    pick_log.log_picks(make_picks_df(), 2026, 3, "regular", log_dir=log_dir, log_file=log_file)
+    now = pd.Timestamp("2026-09-20T12:00:00+00:00")
+    _install_fake_model(
+        monkeypatch,
+        game_info={("Home U", "Away U"): {"start_date": "2026-09-20T20:00:00+00:00", "start_time_tbd": False}},
+        lines=[{"home_team": "Home U", "away_team": "Away U", "lines": [{"provider": "consensus", "spread": -5.0}]}],
+    )
+
+    updated = pick_log.capture_closing_lines("fake-token", log_file=log_file, now=now)
+
+    assert updated == 1
+    entries = pick_log._read_all_entries(log_file)
+    assert entries[0]["closing_spread_home"] == -5.0
+
+
+def test_capture_closing_lines_skips_games_already_kicked_off(log_paths, monkeypatch):
+    log_dir, log_file = log_paths
+    pick_log.log_picks(make_picks_df(), 2026, 3, "regular", log_dir=log_dir, log_file=log_file)
+    now = pd.Timestamp("2026-09-20T22:00:00+00:00")  # after kickoff
+    _install_fake_model(
+        monkeypatch,
+        game_info={("Home U", "Away U"): {"start_date": "2026-09-20T20:00:00+00:00", "start_time_tbd": False}},
+        lines=[{"home_team": "Home U", "away_team": "Away U", "lines": [{"provider": "consensus", "spread": -5.0}]}],
+    )
+
+    updated = pick_log.capture_closing_lines("fake-token", log_file=log_file, now=now)
+
+    assert updated == 0
+    entries = pick_log._read_all_entries(log_file)
+    assert "closing_spread_home" not in entries[0] or entries[0].get("closing_spread_home") is None
+
+
+def test_capture_closing_lines_skips_tbd_kickoff(log_paths, monkeypatch):
+    log_dir, log_file = log_paths
+    pick_log.log_picks(make_picks_df(), 2026, 3, "regular", log_dir=log_dir, log_file=log_file)
+    now = pd.Timestamp("2026-09-20T12:00:00+00:00")
+    _install_fake_model(
+        monkeypatch,
+        game_info={("Home U", "Away U"): {"start_date": "2026-09-20T20:00:00+00:00", "start_time_tbd": True}},
+        lines=[{"home_team": "Home U", "away_team": "Away U", "lines": [{"provider": "consensus", "spread": -5.0}]}],
+    )
+
+    updated = pick_log.capture_closing_lines("fake-token", log_file=log_file, now=now)
+    assert updated == 0
+
+
+def test_capture_closing_lines_overwrites_while_still_pregame(log_paths, monkeypatch):
+    log_dir, log_file = log_paths
+    pick_log.log_picks(make_picks_df(), 2026, 3, "regular", log_dir=log_dir, log_file=log_file)
+    now = pd.Timestamp("2026-09-20T12:00:00+00:00")
+    _install_fake_model(
+        monkeypatch,
+        game_info={("Home U", "Away U"): {"start_date": "2026-09-20T20:00:00+00:00", "start_time_tbd": False}},
+        lines=[{"home_team": "Home U", "away_team": "Away U", "lines": [{"provider": "consensus", "spread": -5.0}]}],
+    )
+    first = pick_log.capture_closing_lines("fake-token", log_file=log_file, now=now)
+    assert first == 1
+
+    # Line moves before kickoff — a later run (still pre-kickoff) should overwrite it.
+    _install_fake_model(
+        monkeypatch,
+        game_info={("Home U", "Away U"): {"start_date": "2026-09-20T20:00:00+00:00", "start_time_tbd": False}},
+        lines=[{"home_team": "Home U", "away_team": "Away U", "lines": [{"provider": "consensus", "spread": -6.5}]}],
+    )
+    second = pick_log.capture_closing_lines("fake-token", log_file=log_file, now=now)
+    assert second == 1
+    entries = pick_log._read_all_entries(log_file)
+    assert entries[0]["closing_spread_home"] == -6.5
+
+
+def test_capture_closing_lines_empty_log_is_a_noop(log_paths):
+    _, log_file = log_paths
+    assert pick_log.capture_closing_lines("fake-token", log_file=log_file) == 0
 
 
 def test_backfill_extras_fills_only_games_not_yet_started(log_paths):
