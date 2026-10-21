@@ -13,7 +13,12 @@ GitHub Actions repo secrets, not Streamlit secrets (this never runs inside Strea
 import os
 import sys
 
-import pick_log
+# Python only adds this script's own directory (scripts/) to sys.path, not the repo root —
+# so pick_log (which lives at the repo root) isn't importable without this, regardless of
+# the invoking shell's current directory.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import pick_log  # noqa: E402
 
 
 def main() -> int:
