@@ -1422,152 +1422,6 @@ with tab5:
         st.caption(f"Cumulative across {total_slates} logged slate(s){note} — see Record by week below "
                    f"for the per-slate breakdown.")
 
-    if total_n > 0 or not manual_records.empty:
-        st.markdown("#### Record by week")
-        st.caption("Every logged slate, win/loss record once results are in — 'Pending' means it's "
-                   "logged but the games haven't finished yet. A row with no real games behind it "
-                   "(marked below) came from a manually-entered record instead.")
-        # Built from logged_df (not logged_weeks()'s list-of-tuples helper) so the merge
-        # key columns share the exact same dtypes as week_record's — both ultimately trace
-        # back to the same load_log() call, avoiding a None-vs-NaN dtype mismatch on the
-        # "week" column (None for postseason) that a fresh tuple-derived DataFrame risks.
-        weeks_display = all_slates.merge(week_record, on=["year", "week", "season_type"], how="left")
-        if not weeks_display.empty:
-            # .apply(axis=1) on an empty DataFrame returns the frame unchanged (not a
-            # Series), which breaks the assignment below — happens here whenever there are
-            # no real logged slates yet and this section is only showing manual records.
-            weeks_display["Record"] = weeks_display.apply(
-                lambda r: f"{int(r['wins'])}-{int(r['losses'])}" if pd.notna(r["wins"]) else "Pending", axis=1,
-            )
-        # Slates with only a remembered total, no real per-game rows at all — these are
-        # never merged into a real slate's numbers (that would double-count if the real
-        # log ever catches up), they're additional rows of their own.
-        manual_only_rows = pd.DataFrame()
-        if not manual_records.empty:
-            existing_keys = set(zip(all_slates["year"], all_slates["week"], all_slates["season_type"]))
-            manual_only_rows = manual_records[
-                ~manual_records.apply(lambda r: (r["year"], r["week"], r["season_type"]) in existing_keys, axis=1)
-            ].copy()
-            manual_only_rows["Record"] = (
-                manual_only_rows["wins"].astype(str) + "-" + manual_only_rows["losses"].astype(str) + " *"
-            )
-            manual_only_rows["win_rate"] = manual_only_rows["wins"] / (manual_only_rows["wins"] + manual_only_rows["losses"])
-            weeks_display = pd.concat([weeks_display, manual_only_rows], ignore_index=True)
-        weeks_display = weeks_display.sort_values(["year", "week"], na_position="first").rename(
-            columns={"year": "Year", "week": "Week", "season_type": "Season Type", "win_rate": "Win Rate"}
-        )
-        st.dataframe(
-            weeks_display[["Year", "Week", "Season Type", "Record", "Win Rate"]],
-            use_container_width=True, hide_index=True,
-            column_config={"Win Rate": st.column_config.ProgressColumn("Win Rate", min_value=0.0, max_value=1.0)},
-        )
-        if not manual_only_rows.empty:
-            st.caption("\\* Manually recorded — no per-game detail, so it won't appear in Game-by-game results.")
-
-    if not logged_df.empty:
-        st.markdown("#### Totals & moneyline accuracy")
-        totals_all = backtest.summarize_market(graded_log, "total_outcome")
-        ml_all = backtest.summarize_market(graded_log, "ml_outcome")
-        if totals_all.empty and ml_all.empty:
-            st.caption("No graded totals or moneyline picks yet. These are only recorded for slates "
-                       "logged from now on (older slates were logged spread-only, and can't be filled "
-                       "in after kickoff without hindsight) — they'll show up here once those games finish.")
-        else:
-            def _rec(df_):
-                if df_.empty:
-                    return "—", "—"
-                r = df_.iloc[0]
-                push = f"-{int(r['pushes'])}" if r["pushes"] else ""
-                rate = f"{r['win_rate']:.1%}" if pd.notna(r["win_rate"]) else "—"
-                return f"{int(r['wins'])}-{int(r['losses'])}{push}", rate
-
-            tot_rec, tot_rate = _rec(totals_all)
-            ml_rec, ml_rate = _rec(ml_all)
-            ml_units = graded_log["ml_profit"].dropna().sum() if "ml_profit" in graded_log else 0.0
-            tm1, tm2, tm3 = st.columns(3)
-            tm1.metric("Over/Under Record", tot_rec, tot_rate, delta_color="off")
-            tm2.metric("Moneyline Record", ml_rec, ml_rate, delta_color="off")
-            tm3.metric("Moneyline Units (1u flat)", f"{ml_units:+.2f}")
-            st.caption("Over/under and moneyline picks logged pre-kickoff, graded on final scores. "
-                       "Moneyline win rate alone can mislead (heavy favorites win often but pay little), "
-                       "so units shows profit at the logged price on a flat 1-unit bet.")
-
-            tier_totals = backtest.summarize_market(graded_log, "total_outcome", "total_tier")
-            strong = graded_log[graded_log["ml_edge"].fillna(0) >= model.ML_EDGE_THRESHOLD]
-            ml_strong = backtest.summarize_market(strong, "ml_outcome")
-            bt1, bt2 = st.columns(2)
-            with bt1:
-                if not tier_totals.empty:
-                    st.caption("Over/under by tier")
-                    tier_totals = tier_totals.assign(win_rate=tier_totals["win_rate"] * 100)
-                    st.dataframe(
-                        tier_totals.rename(columns={"total_tier": "Tier", "wins": "W", "losses": "L",
-                                                    "pushes": "P", "win_rate": "Win Rate"}),
-                        use_container_width=True, hide_index=True,
-                        column_config={"Win Rate": st.column_config.NumberColumn(format="%.1f%%")},
-                    )
-            with bt2:
-                if not ml_strong.empty:
-                    s_rec, s_rate = _rec(ml_strong)
-                    st.caption(f"Moneyline, strong edge only (≥{model.ML_EDGE_THRESHOLD:.0%}): {s_rec} ({s_rate})")
-
-        st.markdown("#### Closing Line Value (CLV)")
-        st.caption("Did the logged spread beat where the market actually closed? This is the standard "
-                   "sharp-betting signal for real edge — win rate alone is noisy over a season, but "
-                   "consistently beating the close isn't. Only covers picks logged after CLV tracking "
-                   "was added and whose game's closing line was actually captured pre-kickoff (see the "
-                   "scheduled capture_closing_lines job) — older picks show no CLV, not zero CLV.")
-        clv_summary = backtest.summarize_clv(graded_log)
-        if clv_summary["n"] == 0:
-            st.caption("No picks with a captured closing line yet.")
-        else:
-            cv1, cv2 = st.columns(2)
-            cv1.metric("Avg CLV", f"{clv_summary['avg_clv']:+.2f} pts", help="Positive means the logged "
-                       "number was better, on average, than where the line closed.")
-            cv2.metric("Beat the Close", f"{clv_summary['positive_rate']:.1%}",
-                      help=f"Share of {clv_summary['n']} picks with positive CLV.")
-
-    with st.expander("➕ Record a remembered result for a slate with no per-game detail"):
-        st.caption("For a slate whose logged picks were lost (e.g. to a disk reset) before anyone "
-                   "backed them up. This is saved on the server alongside the log itself, so — "
-                   "unlike Favorite Team above — everyone visiting the app sees it too. It carries "
-                   "the same reboot risk as the log, for the same reason: there's nowhere else to "
-                   "put it without adding real external storage.")
-        mc1, mc2, mc3, mc4, mc5 = st.columns([1, 1, 1, 1, 1])
-        with mc1:
-            manual_year = st.number_input("Year", min_value=2000, max_value=2030, value=year, key="manual_record_year")
-        with mc2:
-            manual_postseason = st.checkbox("Postseason", key="manual_record_postseason")
-        with mc3:
-            manual_week = st.number_input("Week", min_value=1, max_value=15, value=1,
-                                           disabled=manual_postseason, key="manual_record_week")
-        with mc4:
-            manual_wins_in = st.number_input("Wins", min_value=0, step=1, key="manual_record_wins")
-        with mc5:
-            manual_losses_in = st.number_input("Losses", min_value=0, step=1, key="manual_record_losses")
-        manual_season_type = "postseason" if manual_postseason else "regular"
-        manual_week_val = None if manual_postseason else int(manual_week)
-        save_col, del_col = st.columns(2)
-        with save_col:
-            if st.button("Save remembered record", key="save_manual_record"):
-                pick_log.add_manual_record(int(manual_year), manual_week_val, manual_season_type,
-                                            int(manual_wins_in), int(manual_losses_in))
-                pick_log.sync_to_supabase(supabase_url, supabase_key)
-                st.success(f"Saved {manual_wins_in}-{manual_losses_in} for {int(manual_year)} "
-                           f"{'Postseason' if manual_postseason else f'Week {manual_week}'}.")
-                st.rerun()
-        with del_col:
-            if st.button("Remove this slate's remembered record", key="delete_manual_record"):
-                pick_log.delete_manual_record(int(manual_year), manual_week_val, manual_season_type)
-                pick_log.sync_to_supabase(supabase_url, supabase_key)
-                st.rerun()
-        if not manual_records.empty:
-            st.caption("Currently recorded: " + ", ".join(
-                f"{int(r.year)} {'Postseason' if pd.isna(r.week) else f'Week {int(r.week)}'} ({r.season_type}): "
-                f"{int(r.wins)}-{int(r.losses)}"
-                for r in manual_records.itertuples()
-            ))
-
     if not logged_df.empty:
         st.markdown("#### Game-by-game results")
         st.caption("Pick a logged slate to see exactly which games the model got right.")
@@ -1633,6 +1487,161 @@ with tab5:
                 "Market Spread": st.column_config.NumberColumn("Market Spread", format="%+.1f"),
             },
         )
+
+    st.markdown("---")
+    st.markdown("### 📅 Trends")
+
+    if total_n > 0 or not manual_records.empty:
+        st.markdown("#### Record by week")
+        st.caption("Every logged slate, win/loss record once results are in — 'Pending' means it's "
+                   "logged but the games haven't finished yet. A row with no real games behind it "
+                   "(marked below) came from a manually-entered record instead.")
+        # Built from logged_df (not logged_weeks()'s list-of-tuples helper) so the merge
+        # key columns share the exact same dtypes as week_record's — both ultimately trace
+        # back to the same load_log() call, avoiding a None-vs-NaN dtype mismatch on the
+        # "week" column (None for postseason) that a fresh tuple-derived DataFrame risks.
+        weeks_display = all_slates.merge(week_record, on=["year", "week", "season_type"], how="left")
+        if not weeks_display.empty:
+            # .apply(axis=1) on an empty DataFrame returns the frame unchanged (not a
+            # Series), which breaks the assignment below — happens here whenever there are
+            # no real logged slates yet and this section is only showing manual records.
+            weeks_display["Record"] = weeks_display.apply(
+                lambda r: f"{int(r['wins'])}-{int(r['losses'])}" if pd.notna(r["wins"]) else "Pending", axis=1,
+            )
+        # Slates with only a remembered total, no real per-game rows at all — these are
+        # never merged into a real slate's numbers (that would double-count if the real
+        # log ever catches up), they're additional rows of their own.
+        manual_only_rows = pd.DataFrame()
+        if not manual_records.empty:
+            existing_keys = set(zip(all_slates["year"], all_slates["week"], all_slates["season_type"]))
+            manual_only_rows = manual_records[
+                ~manual_records.apply(lambda r: (r["year"], r["week"], r["season_type"]) in existing_keys, axis=1)
+            ].copy()
+            manual_only_rows["Record"] = (
+                manual_only_rows["wins"].astype(str) + "-" + manual_only_rows["losses"].astype(str) + " *"
+            )
+            manual_only_rows["win_rate"] = manual_only_rows["wins"] / (manual_only_rows["wins"] + manual_only_rows["losses"])
+            weeks_display = pd.concat([weeks_display, manual_only_rows], ignore_index=True)
+        weeks_display = weeks_display.sort_values(["year", "week"], na_position="first").rename(
+            columns={"year": "Year", "week": "Week", "season_type": "Season Type", "win_rate": "Win Rate"}
+        )
+        st.dataframe(
+            weeks_display[["Year", "Week", "Season Type", "Record", "Win Rate"]],
+            use_container_width=True, hide_index=True,
+            column_config={"Win Rate": st.column_config.ProgressColumn("Win Rate", min_value=0.0, max_value=1.0)},
+        )
+        if not manual_only_rows.empty:
+            st.caption("\\* Manually recorded — no per-game detail, so it won't appear in Game-by-game results.")
+
+    st.markdown("---")
+    st.markdown("### 💰 Markets")
+
+    if not logged_df.empty:
+        st.markdown("#### Totals & moneyline accuracy")
+        totals_all = backtest.summarize_market(graded_log, "total_outcome")
+        ml_all = backtest.summarize_market(graded_log, "ml_outcome")
+        if totals_all.empty and ml_all.empty:
+            st.caption("No graded totals or moneyline picks yet. These are only recorded for slates "
+                       "logged from now on (older slates were logged spread-only, and can't be filled "
+                       "in after kickoff without hindsight) — they'll show up here once those games finish.")
+        else:
+            def _rec(df_):
+                if df_.empty:
+                    return "—", "—"
+                r = df_.iloc[0]
+                push = f"-{int(r['pushes'])}" if r["pushes"] else ""
+                rate = f"{r['win_rate']:.1%}" if pd.notna(r["win_rate"]) else "—"
+                return f"{int(r['wins'])}-{int(r['losses'])}{push}", rate
+
+            tot_rec, tot_rate = _rec(totals_all)
+            ml_rec, ml_rate = _rec(ml_all)
+            ml_units = graded_log["ml_profit"].dropna().sum() if "ml_profit" in graded_log else 0.0
+            tm1, tm2, tm3 = st.columns(3)
+            tm1.metric("Over/Under Record", tot_rec, tot_rate, delta_color="off")
+            tm2.metric("Moneyline Record", ml_rec, ml_rate, delta_color="off")
+            tm3.metric("Moneyline Units (1u flat)", f"{ml_units:+.2f}")
+            st.caption("Over/under and moneyline picks logged pre-kickoff, graded on final scores. "
+                       "Moneyline win rate alone can mislead (heavy favorites win often but pay little), "
+                       "so units shows profit at the logged price on a flat 1-unit bet.")
+
+            tier_totals = backtest.summarize_market(graded_log, "total_outcome", "total_tier")
+            strong = graded_log[graded_log["ml_edge"].fillna(0) >= model.ML_EDGE_THRESHOLD]
+            ml_strong = backtest.summarize_market(strong, "ml_outcome")
+            bt1, bt2 = st.columns(2)
+            with bt1:
+                if not tier_totals.empty:
+                    st.caption("Over/under by tier")
+                    tier_totals = tier_totals.assign(win_rate=tier_totals["win_rate"] * 100)
+                    st.dataframe(
+                        tier_totals.rename(columns={"total_tier": "Tier", "wins": "W", "losses": "L",
+                                                    "pushes": "P", "win_rate": "Win Rate"}),
+                        use_container_width=True, hide_index=True,
+                        column_config={"Win Rate": st.column_config.NumberColumn(format="%.1f%%")},
+                    )
+            with bt2:
+                if not ml_strong.empty:
+                    s_rec, s_rate = _rec(ml_strong)
+                    st.caption(f"Moneyline, strong edge only (≥{model.ML_EDGE_THRESHOLD:.0%}): {s_rec} ({s_rate})")
+
+        st.markdown("#### Closing Line Value (CLV)")
+        st.caption("Did the logged spread beat where the market actually closed? This is the standard "
+                   "sharp-betting signal for real edge — win rate alone is noisy over a season, but "
+                   "consistently beating the close isn't. Only covers picks logged after CLV tracking "
+                   "was added and whose game's closing line was actually captured pre-kickoff (see the "
+                   "scheduled capture_closing_lines job) — older picks show no CLV, not zero CLV.")
+        clv_summary = backtest.summarize_clv(graded_log)
+        if clv_summary["n"] == 0:
+            st.caption("No picks with a captured closing line yet.")
+        else:
+            cv1, cv2 = st.columns(2)
+            cv1.metric("Avg CLV", f"{clv_summary['avg_clv']:+.2f} pts", help="Positive means the logged "
+                       "number was better, on average, than where the line closed.")
+            cv2.metric("Beat the Close", f"{clv_summary['positive_rate']:.1%}",
+                      help=f"Share of {clv_summary['n']} picks with positive CLV.")
+
+    st.markdown("---")
+    st.markdown("### 🛠️ Maintenance")
+
+    with st.expander("➕ Record a remembered result for a slate with no per-game detail"):
+        st.caption("For a slate whose logged picks were lost (e.g. to a disk reset) before anyone "
+                   "backed them up. This is saved on the server alongside the log itself, so — "
+                   "unlike Favorite Team above — everyone visiting the app sees it too. It carries "
+                   "the same reboot risk as the log, for the same reason: there's nowhere else to "
+                   "put it without adding real external storage.")
+        mc1, mc2, mc3, mc4, mc5 = st.columns([1, 1, 1, 1, 1])
+        with mc1:
+            manual_year = st.number_input("Year", min_value=2000, max_value=2030, value=year, key="manual_record_year")
+        with mc2:
+            manual_postseason = st.checkbox("Postseason", key="manual_record_postseason")
+        with mc3:
+            manual_week = st.number_input("Week", min_value=1, max_value=15, value=1,
+                                           disabled=manual_postseason, key="manual_record_week")
+        with mc4:
+            manual_wins_in = st.number_input("Wins", min_value=0, step=1, key="manual_record_wins")
+        with mc5:
+            manual_losses_in = st.number_input("Losses", min_value=0, step=1, key="manual_record_losses")
+        manual_season_type = "postseason" if manual_postseason else "regular"
+        manual_week_val = None if manual_postseason else int(manual_week)
+        save_col, del_col = st.columns(2)
+        with save_col:
+            if st.button("Save remembered record", key="save_manual_record"):
+                pick_log.add_manual_record(int(manual_year), manual_week_val, manual_season_type,
+                                            int(manual_wins_in), int(manual_losses_in))
+                pick_log.sync_to_supabase(supabase_url, supabase_key)
+                st.success(f"Saved {manual_wins_in}-{manual_losses_in} for {int(manual_year)} "
+                           f"{'Postseason' if manual_postseason else f'Week {manual_week}'}.")
+                st.rerun()
+        with del_col:
+            if st.button("Remove this slate's remembered record", key="delete_manual_record"):
+                pick_log.delete_manual_record(int(manual_year), manual_week_val, manual_season_type)
+                pick_log.sync_to_supabase(supabase_url, supabase_key)
+                st.rerun()
+        if not manual_records.empty:
+            st.caption("Currently recorded: " + ", ".join(
+                f"{int(r.year)} {'Postseason' if pd.isna(r.week) else f'Week {int(r.week)}'} ({r.season_type}): "
+                f"{int(r.wins)}-{int(r.losses)}"
+                for r in manual_records.itertuples()
+            ))
 
     def _read_and_validate_log_csv(uploaded_file):
         """Guard against a malformed or wrong-shaped upload corrupting the shared pick log."""
