@@ -12,16 +12,16 @@ from ui_helpers import ACCENT, stat_row_html, team_row_html, team_slot_html
 def render(ctx):
     st.markdown("## 💰 Moneylines & Over/Under")
     st.caption("Moneyline edge = model win probability vs. the market's vig-removed implied probability.")
-    st.info(
-        "ℹ️ **Over/Under is a rough estimate, not a calibrated pick like the spread picks.** Base "
-        "prediction blends each team's scoring average with their opponent's average points allowed, "
-        "then adjusts for opponent-adjusted EPA/play (CFBD's adjustedMetrics) and weather (wind above "
-        "15mph, precipitation, snow). The adjustments use real signal, but the conversion factors "
-        "(EPA→points, wind→points) are disclosed heuristics, not empirically fit — see 'Opp Adj' and "
-        "'Weather Adj' below for how much each moved the number, and treat the total as directional, "
-        "not precise.",
-        icon="ℹ️",
-    )
+    with st.expander("ℹ️ How is Over/Under estimated?"):
+        st.caption(
+            "A rough estimate, not a calibrated pick like the spread picks. Base prediction blends "
+            "each team's scoring average with their opponent's average points allowed, then adjusts "
+            "for opponent-adjusted EPA/play (CFBD's adjustedMetrics) and weather (wind above 15mph, "
+            "precipitation, snow). The adjustments use real signal, but the conversion factors "
+            "(EPA→points, wind→points) are disclosed heuristics, not empirically fit — see 'Opp Adj' "
+            "and 'Weather Adj' on each card for how much each moved the number, and treat the total "
+            "as directional, not precise."
+        )
 
     df = ctx.df
     has_ml_col = "ml_pick_team" in df.columns

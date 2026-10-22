@@ -54,16 +54,16 @@ def _resolve_top12_source(ctx):
 
 def _render_slate_summary(ctx):
     """Slate-level headline numbers (how many games, how many strong picks, the tier mix)
-    — lives here, right above the ranked Top 12 it's summarizing, rather than at the top
-    of the whole app above every tab (where it was before this moved)."""
+    — lives at the bottom of this tab, after the Top 12 and the All Games table, as a
+    closing summary rather than something to read before seeing the actual picks."""
     df = ctx.df
+    st.markdown("##### 🎯 This Slate's Confidence")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total Games",    len(df))
     c2.metric("Strong Picks",   len(ctx.strong))
     c3.metric("Tier A Picks",   len(df[df["tier"] == "A"]))
     c4.metric("Avg Cover Prob", f"{df['cover_prob'].mean():.3f}")
 
-    st.markdown("##### 🎯 This Slate's Confidence")
     tier_order = ["A", "B", "C", "Pass"]
     tier_counts = df["tier"].value_counts()
     tier_bar_segs = "".join(
@@ -81,11 +81,9 @@ def _render_slate_summary(ctx):
         unsafe_allow_html=True,
     )
     st.caption("Share of this slate's games in each tier — more green (Tier A) means more strong plays.")
-    st.markdown("---")
 
 
 def render(ctx):
-    _render_slate_summary(ctx)
     top12_source, cbs_status, cbs_unmatched = _resolve_top12_source(ctx)
 
     st.markdown("## 🏆 CBS Pick'em — Top 12 ATS Picks")
@@ -231,3 +229,6 @@ def render(ctx):
             st.download_button("⬇️ Strong Picks (CSV)",
                                data=ctx.strong.drop(columns=["pick_team"]).rename(columns=DISPLAY_COLUMNS).to_csv(index=False),
                                file_name=f"{fname2}.csv", mime="text/csv")
+
+    st.markdown("---")
+    _render_slate_summary(ctx)
