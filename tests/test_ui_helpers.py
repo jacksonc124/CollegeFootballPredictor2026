@@ -5,8 +5,8 @@ from ui_helpers import build_parlay_leg_pool, format_game_date, outcome_row_css,
 
 
 def test_format_game_date_with_known_time():
-    # 2026-09-19 19:30 UTC -> 3:30 PM ET (UTC-4 during daylight saving)
-    assert format_game_date("2026-09-19T19:30:00+00:00", False) == "Sep 19, 3:30 PM ET"
+    # 2026-09-19 19:30 UTC -> 2:30 PM CT (UTC-5 during daylight saving)
+    assert format_game_date("2026-09-19T19:30:00+00:00", False) == "Sep 19, 2:30 PM CT"
 
 
 def test_format_game_date_tbd_omits_time():
