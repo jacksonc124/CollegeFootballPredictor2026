@@ -17,7 +17,7 @@ def render(ctx):
                "full detail (parlays, rankings, accuracy) lives in the other tabs.")
 
     if ctx.today_df.empty:
-        st.info("No games today in the slate currently selected in the sidebar. "
+        st.info("No games today in the slate currently selected above. "
                 "Adjust Year/Week there to jump to a different day.")
         return
 

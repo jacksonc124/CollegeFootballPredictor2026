@@ -114,7 +114,7 @@ streamlit run app.py
 ## Project layout
 
 - `model.py` — shared fetchers (SP+ ratings, betting lines, team logos), math helpers, and pick-building logic used by both entry points below.
-- `app.py` — Streamlit dashboard orchestrator (secrets, sidebar, fetch/filter pipeline, tab dispatch).
+- `app.py` — Streamlit dashboard orchestrator (secrets, top control bar, fetch/filter pipeline, tab dispatch).
 - `ui_helpers.py` — pure presentation helpers (formatting, CSS, the parlay leg-pool builder) shared across `tabs/`.
 - `tabs/` — one module per dashboard tab (Today's Games, Pick'em, Parlays, Moneylines & O/U, Rankings & ATS, Model Accuracy, Stats).
 - `cbs_pickem.py` — optional CBS Pick'em pool integration (see above).
