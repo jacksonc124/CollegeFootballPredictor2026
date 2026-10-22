@@ -1,7 +1,30 @@
+import base64
+import json
+from datetime import datetime, timedelta, timezone
+
 import pandas as pd
 import pytest
 
-from cbs_pickem import extract_pool_games, match_pool_games_to_df, match_team_name
+from cbs_pickem import (
+    cookie_expiry,
+    cookie_expiry_warning,
+    extract_pool_games,
+    match_pool_games_to_df,
+    match_team_name,
+)
+
+
+def _fake_jwt(payload: dict) -> str:
+    """A JWT-shaped (but unsigned/fake) token with the given payload — enough to test
+    cbs_pickem's payload decoder, which never verifies signatures anyway (see its
+    docstring: it only ever reads our own already-trusted cookie)."""
+    def b64(obj):
+        return base64.urlsafe_b64encode(json.dumps(obj).encode()).decode().rstrip("=")
+    return f"{b64({'alg': 'none'})}.{b64(payload)}.fakesignature"
+
+
+def _cookie_with_auth_state(payload: dict) -> str:
+    return f"userId=abc123; auth_state={_fake_jwt(payload)}; other=xyz"
 
 
 def _sample_graphql_data():
@@ -128,3 +151,41 @@ def test_match_pool_games_to_df_empty_df():
     pool_games = extract_pool_games(_sample_graphql_data())
     matched, unmatched = match_pool_games_to_df(pool_games, pd.DataFrame(), ["Marshall", "South Alabama"])
     assert matched.empty
+
+
+def test_cookie_expiry_reads_the_exp_claim():
+    expires_at = datetime(2027, 1, 1, tzinfo=timezone.utc)
+    cookie = _cookie_with_auth_state({"exp": int(expires_at.timestamp())})
+    assert cookie_expiry(cookie) == expires_at
+
+
+def test_cookie_expiry_none_without_auth_state():
+    assert cookie_expiry("userId=abc123; other=xyz") is None
+
+
+def test_cookie_expiry_none_for_malformed_token():
+    assert cookie_expiry("auth_state=not-a-real-jwt; other=xyz") is None
+
+
+def test_cookie_expiry_warning_none_when_far_from_expiry():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    cookie = _cookie_with_auth_state({"exp": int((now + timedelta(days=30)).timestamp())})
+    assert cookie_expiry_warning(cookie, now=now) is None
+
+
+def test_cookie_expiry_warning_within_threshold():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    cookie = _cookie_with_auth_state({"exp": int((now + timedelta(days=3)).timestamp())})
+    warning = cookie_expiry_warning(cookie, now=now)
+    assert "expires in 3 day(s)" in warning
+
+
+def test_cookie_expiry_warning_already_expired():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    cookie = _cookie_with_auth_state({"exp": int((now - timedelta(days=1)).timestamp())})
+    warning = cookie_expiry_warning(cookie, now=now)
+    assert "has expired" in warning
+
+
+def test_cookie_expiry_warning_none_when_expiry_unknown():
+    assert cookie_expiry_warning("userId=abc123") is None

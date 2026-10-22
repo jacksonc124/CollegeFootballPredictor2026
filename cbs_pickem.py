@@ -11,14 +11,20 @@ changes their schema. fetch_pool_games() surfaces CBS's own GraphQL error messag
 an expired cookie) rather than a generic failure, specifically so that's easy to diagnose
 if it ever stops working.
 
-NOT LIVE-TESTED: built from a captured request/response, not verified against a live call
-(this environment has no network access to cbssports.com). The parsing functions
+Confirmed working against a live pool (14/17 games matched automatically; the other 3
+needed match_team_name's abbreviation handling, since added). This module still can't be
+exercised from this development environment itself (no network access to cbssports.com),
+so changes here are necessarily unverified until tried against the real API. The parsing
+functions
 (extract_pool_games, match_team_name, match_pool_games_to_df) are pure and unit-tested;
 fetch_pool_games itself — the actual network call — isn't, and may need a round of
 debugging against what CBS actually returns.
 """
 
+import base64
 import difflib
+import json
+from datetime import datetime, timezone
 
 import requests
 
@@ -206,3 +212,57 @@ def match_pool_games_to_df(pool_games: list[dict], df, known_team_names):
         return df, unmatched
     mask = df.apply(lambda r: (r["home_team"], r["away_team"]) in matched_pairs, axis=1)
     return df[mask].copy(), unmatched
+
+
+def _decode_jwt_payload(token: str) -> dict:
+    """
+    Decode a JWT's payload with NO signature verification. Safe here specifically because
+    this only ever reads CBS_COOKIE — a secret the app already trusts completely (it's
+    used to authenticate as the user) — purely to read its own "exp" claim for an expiry
+    warning; it is never used to verify or trust a token from anyone else. Returns {} if
+    the token isn't shaped like a JWT or its payload isn't valid JSON.
+    """
+    parts = token.split(".")
+    if len(parts) < 2:
+        return {}
+    padded = parts[1] + "=" * (-len(parts[1]) % 4)
+    try:
+        return json.loads(base64.urlsafe_b64decode(padded))
+    except Exception:
+        return {}
+
+
+def cookie_expiry(cookie: str) -> datetime | None:
+    """
+    Best-effort expiry time for the CBS_COOKIE secret, read from its auth_state cookie's
+    own JWT "exp" claim. Returns None if auth_state isn't present in the cookie string or
+    its payload doesn't parse as expected — kept distinct from "already expired" so
+    cookie_expiry_warning() can tell "unknown" apart from "about to expire."
+    """
+    for part in cookie.split(";"):
+        name, _, value = part.strip().partition("=")
+        if name == "auth_state":
+            exp = _decode_jwt_payload(value).get("exp")
+            if isinstance(exp, (int, float)):
+                return datetime.fromtimestamp(exp, tz=timezone.utc)
+    return None
+
+
+def cookie_expiry_warning(cookie: str, now: datetime | None = None, warn_within_days: int = 5) -> str | None:
+    """
+    A short warning message if CBS_COOKIE's session is already expired or will expire
+    within warn_within_days, else None. Returns None (no warning) when the expiry can't be
+    determined at all, rather than treating "unknown" the same as "about to expire" — an
+    unusual cookie shape isn't the same situation as an imminent failure.
+    """
+    expiry = cookie_expiry(cookie)
+    if expiry is None:
+        return None
+    now = now or datetime.now(tz=timezone.utc)
+    days_left = (expiry - now).days
+    if days_left < 0:
+        return "❌ Your CBS session cookie has expired — grab a fresh one (see README)."
+    if days_left < warn_within_days:
+        when = "within a day" if days_left == 0 else f"in {days_left} day(s)"
+        return f"⚠️ Your CBS session cookie expires {when} — grab a fresh one soon (see README)."
+    return None

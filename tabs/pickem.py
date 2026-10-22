@@ -56,6 +56,8 @@ def render(ctx):
     st.caption("Ranked by cover probability · Against the spread")
     if cbs_status:
         st.caption(cbs_status)
+    if ctx.cbs_cookie_warning:
+        st.warning(ctx.cbs_cookie_warning)
     if cbs_unmatched:
         with st.expander(f"⚠️ {len(cbs_unmatched)} pool game(s) couldn't be matched — check manually"):
             for g in cbs_unmatched:
