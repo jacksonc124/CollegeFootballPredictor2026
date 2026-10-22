@@ -34,6 +34,8 @@ CENTRAL = ZoneInfo("America/Chicago")
 def main() -> int:
     bearer_token = os.environ.get("BEARER_TOKEN")
     webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
+    supabase_url = os.environ.get("SUPABASE_URL")
+    supabase_key = os.environ.get("SUPABASE_KEY")
     cbs_cookie = os.environ.get("CBS_COOKIE")
     cbs_pool_id = os.environ.get("CBS_POOL_ID")
     cbs_entry_id = os.environ.get("CBS_ENTRY_ID")
@@ -44,6 +46,13 @@ def main() -> int:
     if not webhook_url:
         print("DISCORD_WEBHOOK_URL not set — nowhere to post.")
         return 1
+
+    # A cookie saved via the in-app "Replace CBS cookie" form overrides the CBS_COOKIE
+    # secret below — same reasoning as app.py: replacing an expired cookie should reach
+    # this scheduled job too, not just the Streamlit app, with no separate secret update.
+    _stored_cookie = cbs_pickem.load_cookie_from_supabase(supabase_url, supabase_key)
+    if _stored_cookie:
+        cbs_cookie = _stored_cookie
 
     today = datetime.now(CENTRAL).date()
     calendar = model.get_calendar(bearer_token, today.year)

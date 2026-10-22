@@ -58,6 +58,15 @@ except Exception:
     cbs_cookie = os.environ.get("CBS_COOKIE", "")
     cbs_pool_id = os.environ.get("CBS_POOL_ID", "")
     cbs_entry_id = os.environ.get("CBS_ENTRY_ID", "")
+
+# A cookie saved via the in-app "Replace CBS cookie" form (see tabs/pickem.py) overrides
+# the secret above — that's the whole point: once Supabase is configured, replacing an
+# expired cookie is a one-paste action in the running app, picked up here on the very
+# next rerun, instead of editing secrets.toml and redeploying.
+_stored_cbs_cookie = cbs_pickem.load_cookie_from_supabase(supabase_url, supabase_key)
+if _stored_cbs_cookie:
+    cbs_cookie = _stored_cbs_cookie
+
 cbs_configured = bool(cbs_cookie and cbs_pool_id and cbs_entry_id)
 # Checked once per rerun (cheap — no network, just decodes the cookie's own JWT claim),
 # so there's a heads-up before the cookie expires instead of just a silent fallback to

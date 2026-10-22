@@ -64,6 +64,34 @@ def _render_slate_summary(ctx):
     st.caption("Share of this slate's games in each tier — more green (Tier A) means more strong plays.")
 
 
+def _render_cookie_replacement_form(ctx):
+    """
+    Lets you paste a freshly-copied CBS cookie in right here instead of editing
+    secrets.toml and redeploying — saved to Supabase (see cbs_pickem.save_cookie_to_supabase),
+    so the weekly Discord push picks it up too, with no separate GitHub secret update.
+    Only shown when Supabase is actually configured — without it there's nowhere
+    persistent to save a pasted cookie that both this app and the Discord push would see.
+    """
+    if not (ctx.supabase_url and ctx.supabase_key):
+        st.caption("💡 Set up Supabase (see README) to replace this cookie right here instead of "
+                   "editing secrets and redeploying.")
+        return
+    with st.expander("🔄 Replace CBS cookie"):
+        new_cookie = st.text_input(
+            "Paste your fresh cookie value", type="password", key="cbs_cookie_replacement",
+            help="Same steps as the initial setup (see README) — DevTools Network tab, the "
+                 "picks.cbssports.com request, copy the 'cookie:' request header.",
+        )
+        if st.button("Save", key="save_cbs_cookie_btn", disabled=not new_cookie):
+            try:
+                cbs_pickem.save_cookie_to_supabase(new_cookie, ctx.supabase_url, ctx.supabase_key)
+            except Exception as e:
+                st.error(f"Couldn't save: {e}")
+            else:
+                st.success("Saved — refreshing…")
+                st.rerun()
+
+
 def render(ctx):
     top12_source, cbs_status, cbs_unmatched = _resolve_top12_source(ctx)
 
@@ -73,6 +101,7 @@ def render(ctx):
         st.caption(cbs_status)
     if ctx.cbs_cookie_warning:
         st.warning(ctx.cbs_cookie_warning)
+        _render_cookie_replacement_form(ctx)
     if cbs_unmatched:
         with st.expander(f"⚠️ {len(cbs_unmatched)} pool game(s) couldn't be matched — check manually"):
             for g in cbs_unmatched:
