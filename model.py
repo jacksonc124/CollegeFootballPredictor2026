@@ -1095,7 +1095,7 @@ PASSING_YARD_WEIGHT = 0.5
 
 
 def build_stat_leaderboard(passing: list[dict], rushing: list[dict], receiving: list[dict],
-                            top_n: int = 10) -> pd.DataFrame:
+                            top_n: int = 10, team_games: dict | None = None) -> pd.DataFrame:
     """
     Simple stat-based offensive leaderboard — NOT real Heisman odds. CFBD has no
     awards-odds market data (no book prices a Heisman futures line through this API),
@@ -1108,9 +1108,18 @@ def build_stat_leaderboard(passing: list[dict], rushing: list[dict], receiving: 
     Each input is a list of {"player", "team", "position", "stat_type", "stat"} dicts as
     returned by get_player_season_stats (only "YDS" and "TD" stat_types are used; others,
     e.g. completions/attempts/long, are ignored). Returns a DataFrame sorted by score
-    descending, truncated to top_n, with columns: player, team, position, pass_yds,
-    pass_td, rush_yds, rush_td, rec_yds, rec_td, total_yards (the true, unweighted sum —
-    for display), total_td, score (the weighted ranking metric).
+    descending (or score_per_game, see below), truncated to top_n, with columns: player,
+    team, position, pass_yds, pass_td, rush_yds, rush_td, rec_yds, rec_td, total_yards
+    (the true, unweighted sum — for display), total_td, score (the weighted ranking
+    metric).
+
+    team_games optionally maps {team: games played} (e.g. from get_team_ats_records'
+    "games" field) — cumulative-season stats otherwise favor whoever has simply played
+    more games, which early in a season just means "whose team played earlier in the
+    week," not "who's better." When given, adds games/score_per_game columns and ranks
+    by score_per_game instead of raw season score. A team missing from team_games (or a
+    team_games of None) falls back to 1 game rather than raising, so one missing team
+    doesn't crash the whole leaderboard.
     """
     totals: dict[str, dict] = {}
 
@@ -1144,6 +1153,12 @@ def build_stat_leaderboard(passing: list[dict], rushing: list[dict], receiving: 
         total_yards = t["pass_yds"] + t["rush_yds"] + t["rec_yds"]
         total_td = t["pass_td"] + t["rush_td"] + t["rec_td"]
         score = (PASSING_YARD_WEIGHT * t["pass_yds"] + t["rush_yds"] + t["rec_yds"]) + 6 * total_td
-        rows.append({**t, "total_yards": total_yards, "total_td": total_td, "score": score})
+        row = {**t, "total_yards": total_yards, "total_td": total_td, "score": score}
+        if team_games is not None:
+            games = team_games.get(t["team"]) or 1
+            row["games"] = games
+            row["score_per_game"] = score / games
+        rows.append(row)
 
-    return pd.DataFrame(rows).sort_values("score", ascending=False).head(top_n).reset_index(drop=True)
+    sort_col = "score_per_game" if team_games is not None else "score"
+    return pd.DataFrame(rows).sort_values(sort_col, ascending=False).head(top_n).reset_index(drop=True)
