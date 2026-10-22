@@ -305,11 +305,11 @@ STYLES = """
     .today-strip-time.status-final-loss { color: #ef4444; }
     .today-strip-time.status-final-push { color: #9ca3af; }
 
-    .total-pick-line {
-        font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 16px;
+    .market-pick-line {
+        font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 15px;
         color: #fff; text-align: center; margin-top: 4px;
     }
-    .total-pick-line b { color: #38bdf8; }
+    .market-pick-line b { color: #38bdf8; }
     .neutral-badge { font-size: 11px; color: #8a909c; text-align: center; margin-top: -4px; }
 
     .parlay-card {
