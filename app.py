@@ -532,7 +532,7 @@ st.markdown("---")
 # ══════════════════════════════════════════════════════════════════════════════
 tab0, tab1, tab2, tab3, tab4 = st.tabs([
     "🏆  CBS Pick'em Top 12",
-    "💰🎰  Markets & Parlays",
+    "🎲  Gambling",
     "🥇  Rankings & ATS",
     "📊  Model Accuracy",
     "📈  Stats",

@@ -291,6 +291,10 @@ STYLES = """
     .today-strip .team-slot-name { font-size: 11px; }
     .today-strip .pick-flag { font-size: 8px; padding: 1px 6px; }
     .today-strip .at-sep { display: none; }
+    .today-strip-line {
+        text-align: center; font-family: 'Barlow Condensed', sans-serif; font-weight: 600;
+        font-size: 11px; letter-spacing: .03em; color: #aab2c0;
+    }
     .today-strip-score {
         display: flex; justify-content: space-around; align-items: baseline;
         font-family: 'Anton', sans-serif; font-weight: 400; font-size: 22px; color: #fff;

@@ -766,3 +766,30 @@ def test_build_stat_leaderboard_ignores_unparseable_stat_values():
     passing = [{"player": "QB1", "team": "A", "position": "QB", "stat_type": "YDS", "stat": "N/A"}]
     board = model.build_stat_leaderboard(passing, [], [])
     assert board.empty
+
+
+def test_build_stat_leaderboard_per_game_reranks_fewer_but_better_games():
+    # QB1 has the bigger season total, but has played twice as many games as QB2 — per
+    # game, QB2 is actually more productive, which should flip the ranking once
+    # team_games is supplied (raw cumulative score, the default, still ranks QB1 first).
+    passing = [
+        {"player": "QB1", "team": "A", "position": "QB", "stat_type": "YDS", "stat": "3000"},
+        {"player": "QB1", "team": "A", "position": "QB", "stat_type": "TD", "stat": "20"},
+        {"player": "QB2", "team": "B", "position": "QB", "stat_type": "YDS", "stat": "2000"},
+        {"player": "QB2", "team": "B", "position": "QB", "stat_type": "TD", "stat": "20"},
+    ]
+    cumulative = model.build_stat_leaderboard(passing, [], [], top_n=10)
+    assert cumulative.iloc[0]["player"] == "QB1"
+
+    per_game = model.build_stat_leaderboard(passing, [], [], top_n=10, team_games={"A": 10, "B": 5})
+    assert per_game.iloc[0]["player"] == "QB2"
+    qb2 = per_game[per_game["player"] == "QB2"].iloc[0]
+    assert qb2["games"] == 5
+    assert qb2["score_per_game"] == qb2["score"] / 5
+
+
+def test_build_stat_leaderboard_per_game_defaults_missing_team_to_one_game():
+    passing = [{"player": "QB1", "team": "Unknown U", "position": "QB", "stat_type": "YDS", "stat": "300"}]
+    board = model.build_stat_leaderboard(passing, [], [], team_games={})
+    assert board.iloc[0]["games"] == 1
+    assert board.iloc[0]["score_per_game"] == board.iloc[0]["score"]
