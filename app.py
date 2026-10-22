@@ -88,54 +88,45 @@ def get_team_conferences(yr):
     return model.get_team_conferences(bearer_token, yr)
 
 
-# ── sidebar ───────────────────────────────────────────────────────────────────
+# ── top control bar (was a left sidebar; moved to the top of the page) ────────
 # date.today() is the server's system clock, not Central — on a UTC host it flips to
 # "tomorrow" as early as 7pm Central, hours before it's actually tomorrow for anyone
 # watching a game. Every "today" in this app needs to mean Central-today specifically.
 _today = datetime.now(CENTRAL).date()
 default_year, default_week = model.resolve_current_week(get_calendar_cached(_today.year), _today.year, _today)
 
-with st.sidebar:
-    st.markdown("# 🏈 CFB MODEL")
-    st.markdown("---")
-    st.markdown("### 📅 Season")
+st.markdown("# 🏈 CFB MODEL")
+bar1, bar2, bar3, bar4, bar5 = st.columns([1, 1.3, 1, 1.2, 1.5])
+with bar1:
     year = st.number_input("Year", min_value=2000, max_value=2030, value=default_year, step=1)
+with bar2:
     postseason = st.checkbox("📬 Postseason / Bowl Games", value=False,
                              help="Fetches every bowl & CFP game for the selected year, ignoring week. "
                                   "CFBD groups all of them under one 'week', so the week selector doesn't apply here.")
+with bar3:
     # A dropdown beats a drag-slider for picking one of 15 discrete values on a touchscreen —
     # a slider needs a precise drag gesture, a dropdown just needs a tap.
     week = st.selectbox(
         "Week", options=list(range(1, 16)), index=default_week - 1,
         format_func=lambda w: f"Week {w}", disabled=postseason,
     )
-
-    week0_filter = "All"
-    if week == 1 and not postseason:
-        week0_filter = st.radio(
-            "Week 1 slate", ["All", "Week 0 only", "Week 1 only"], horizontal=True,
-            help="CFBD lumps the early season-opening games (what fans call 'Week 0') and the "
-                 "Labor Day weekend slate together under one 'week 1' — there's no such split in "
-                 "their data. This filters by actual game date instead (cutoff: the Thursday "
-                 "before Labor Day).",
-        )
-
+with bar4:
     today_only = st.checkbox("📅 Today's games only", value=False,
                              help="Filter to just games kicking off today (in CT, matching the "
                                   "kickoff times shown on each card).")
 
-    # Both only depend on `year`, fetched here (not in the main fetch block below, which
-    # doesn't run until after the sidebar) so these controls have real options on first
-    # render. Caught broadly and degraded to "no options" rather than crashing the sidebar —
-    # e.g. if cfbd isn't installed yet, that's reported by the friendlier check further down.
-    try:
-        _sidebar_team_names = sorted(get_team_logos(year).keys())
-        _sidebar_conferences = sorted(set(get_team_conferences(year).values()))
-    except Exception as e:
-        print(f"Warning: failed to load team/conference options for sidebar: {e}")
-        _sidebar_team_names, _sidebar_conferences = [], []
+# Both only depend on `year`, fetched here (not in the main fetch block below, which
+# doesn't run until after this control bar) so these controls have real options on first
+# render. Caught broadly and degraded to "no options" rather than crashing the page —
+# e.g. if cfbd isn't installed yet, that's reported by the friendlier check further down.
+try:
+    _sidebar_team_names = sorted(get_team_logos(year).keys())
+    _sidebar_conferences = sorted(set(get_team_conferences(year).values()))
+except Exception as e:
+    print(f"Warning: failed to load team/conference options for the control bar: {e}")
+    _sidebar_team_names, _sidebar_conferences = [], []
 
-    st.markdown("### ⭐ Your Team")
+with bar5:
     # No login system exists here, so there's no per-user account to attach this to —
     # the closest real equivalent is making it sticky for this browser via the URL's
     # query string, which survives reloads and works from a bookmark. Query params are
@@ -148,7 +139,7 @@ with st.sidebar:
         default_favorite = NO_FAVORITE
 
     favorite_team = st.selectbox(
-        "Favorite Team", options=favorite_options, index=favorite_options.index(default_favorite),
+        "⭐ Favorite Team", options=favorite_options, index=favorite_options.index(default_favorite),
         help="Highlights this team's game wherever it shows up in the current slate. Saved in "
              "the page's URL — reloading or revisiting that URL (e.g. from a bookmark) remembers it.",
     )
@@ -158,15 +149,27 @@ with st.sidebar:
     else:
         st.query_params["favorite_team"] = favorite_team
 
-    selected_conferences = st.multiselect(
-        "🏟️ Conferences", options=_sidebar_conferences, default=_sidebar_conferences,
-        help="Only show games involving at least one team from these conferences. "
-             "Leave everything selected to show every conference.",
+week0_filter = "All"
+if week == 1 and not postseason:
+    week0_filter = st.radio(
+        "Week 1 slate", ["All", "Week 0 only", "Week 1 only"], horizontal=True,
+        help="CFBD lumps the early season-opening games (what fans call 'Week 0') and the "
+             "Labor Day weekend slate together under one 'week 1' — there's no such split in "
+             "their data. This filters by actual game date instead (cutoff: the Thursday "
+             "before Labor Day).",
     )
 
-    # Home Field Advantage is a rarely-touched tuning knob, not a day-to-day nav control —
-    # tucked away so the sidebar's main job (picking a slate) isn't cluttered by it.
-    with st.expander("⚙️ Advanced"):
+# Conferences and Home Field Advantage are lower-frequency tweaks than the controls
+# above, so they're tucked into an expander rather than taking up a permanent row.
+with st.expander("⚙️ More filters & advanced"):
+    adv1, adv2 = st.columns([3, 1])
+    with adv1:
+        selected_conferences = st.multiselect(
+            "🏟️ Conferences", options=_sidebar_conferences, default=_sidebar_conferences,
+            help="Only show games involving at least one team from these conferences. "
+                 "Leave everything selected to show every conference.",
+        )
+    with adv2:
         home_field = st.number_input(
             "Home Field Advantage (pts)",
             min_value=0.0, max_value=10.0, value=model.DEFAULT_HOME_FIELD, step=0.5,
@@ -176,16 +179,16 @@ with st.sidebar:
                  "so they still get this value.",
         )
 
-    st.markdown("---")
-    st.markdown(
-        f'<div class="fetch-caption">📡 Fetching <b>{year} · '
-        f'{"Postseason" if postseason else f"Week {week}"}</b> · consensus lines'
-        f'<br/>Results update automatically as you change these settings. '
-        f'Ratings/lines are cached up to 1 hour.</div>',
-        unsafe_allow_html=True,
-    )
+st.markdown(
+    f'<div class="fetch-caption">📡 Fetching <b>{year} · '
+    f'{"Postseason" if postseason else f"Week {week}"}</b> · consensus lines'
+    f'<br/>Results update automatically as you change these settings. '
+    f'Ratings/lines are cached up to 1 hour.</div>',
+    unsafe_allow_html=True,
+)
+st.markdown("---")
 
-# Resolve API params from sidebar state
+# Resolve API params from the control bar's state
 season_type = "postseason" if postseason else "regular"
 api_week    = None if postseason else week
 
@@ -196,8 +199,8 @@ if week0_filter != "All":
     season_label += f" · {week0_filter}"
 if today_only:
     season_label += " · Today Only"
-st.markdown(f"# CFB — {year} · {season_label}")
-st.markdown("SP+ ratings vs. consensus market spreads · Edge-based ATS picks")
+st.markdown(f"### {year} · {season_label}")
+st.caption("SP+ ratings vs. consensus market spreads · Edge-based ATS picks")
 st.markdown("---")
 
 if not bearer_token:
@@ -403,35 +406,6 @@ df["model_spread_home"] = -df["model_spread_home"]
 
 strong = model.strong_picks(df)
 
-# ── Summary metrics ───────────────────────────────────────────────────────────
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Total Games",    len(df))
-c2.metric("Strong Picks",   len(strong))
-c3.metric("Tier A Picks",   len(df[df["tier"] == "A"]))
-c4.metric("Avg Cover Prob", f"{df['cover_prob'].mean():.3f}")
-
-# ── Slate confidence breakdown ──────────────────────────────────────────────────
-st.markdown("##### 🎯 This Slate's Confidence")
-tier_order = ["A", "B", "C", "Pass"]
-tier_counts = df["tier"].value_counts()
-tier_bar_segs = "".join(
-    f'<div class="tier-bar-seg" style="flex:{tier_counts.get(t, 0)};background:{TIER_COLORS[t]};"></div>'
-    for t in tier_order
-)
-tier_bar_legend = "".join(
-    f'<span><b style="color:{TIER_COLORS[t]}">{tier_counts.get(t, 0)}</b> '
-    f'{"Tier " + t if t != "Pass" else "Pass"}</span>'
-    for t in tier_order
-)
-st.markdown(
-    f'<div class="tier-bar">{tier_bar_segs}</div>'
-    f'<div class="tier-bar-legend">{tier_bar_legend}</div>',
-    unsafe_allow_html=True,
-)
-st.caption("Share of this slate's games in each tier — more green (Tier A) means more strong plays. "
-           "See the Pick'em tab for the ranked list.")
-st.markdown("---")
-
 
 # ── Logo helper ───────────────────────────────────────────────────────────────
 def logo_img(team, size=32, dim=False):
@@ -462,68 +436,14 @@ def logo_img(team, size=32, dim=False):
 
 
 def fav_star(team: str) -> str:
-    """A small marker for the sidebar's favorite team, prefixed the same way rank_badge()
+    """A small marker for the favorite team, prefixed the same way rank_badge()
     prefixes AP/Coaches rank — so it's visible in any listing without a dedicated card."""
     return "⭐ " if favorite_team and team == favorite_team else ""
 
 
-# ── Favorite team highlight ──────────────────────────────────────────────────────
-if favorite_team:
-    fav_rows = df[(df["home_team"] == favorite_team) | (df["away_team"] == favorite_team)]
-    if fav_rows.empty:
-        st.info(f"⭐ {favorite_team} isn't playing in this slate.")
-    else:
-        row = fav_rows.iloc[0]
-        tier, home, away       = row["tier"], row["home_team"], row["away_team"]
-        pick_team, cover, edge = row["pick_team"], row["cover_prob"], row["edge_points"]
-        spread                 = row["market_spread_home"]
-        neutral_site           = row.get("neutral_site")
-        venue                  = row.get("venue") or ""
-        game_date              = row.get("start_date") or ""
-        tier_color             = TIER_COLORS.get(tier, ACCENT)
-        tier_text              = tier_badge_text_color(tier)
-        # This card is framed in the fan's own team's brand color (not the tier color)
-        # since it's "your team", not primarily a pick — the pick itself still shows via
-        # the tier-colored glow on whichever logo the model actually picked, so the two
-        # meanings (team identity vs. pick confidence) stay visually distinct.
-        fav_color              = team_colors.get(favorite_team) or tier_color
-        if neutral_site is None:
-            site_str = ""
-        elif neutral_site:
-            site_str = f"🏟 {venue}" if venue else "🏟 Neutral Site"
-        else:
-            site_str = f"🏠 {venue}" if venue else "🏠 Home Game"
-
-        # Dim only the side that's neither the favorite nor the model's pick — your own
-        # team never goes black-and-white on its own card, even on weeks the model likes
-        # the other side.
-        away_slot = team_slot_html(
-            f"{model.rank_badge(away, rankings_data)}{away}",
-            logo_img(away, 56, dim=pick_team != away and away != favorite_team),
-            is_pick=pick_team == away, tier_color=tier_color,
-        )
-        home_slot = team_slot_html(
-            f"{model.rank_badge(home, rankings_data)}{home}",
-            logo_img(home, 56, dim=pick_team != home and home != favorite_team),
-            is_pick=pick_team == home, tier_color=tier_color,
-        )
-        meta_lines = [l for l in [site_str, f"🗓 {game_date}" if game_date else ""] if l]
-        st.markdown(
-            f'<div class="matchup-card" style="--tier:{fav_color};max-width:420px;">'
-            f'<div class="matchup-card-top">'
-            f'<div class="matchup-rank">⭐ Your Team</div>'
-            f'<div class="tier-badge" style="--tier:{tier_color};--tier-text:{tier_text};">TIER {tier}</div>'
-            f'</div>'
-            f'{team_row_html(away_slot, home_slot)}'
-            f'{stat_row_html([(f"{cover:.0%}", "Cover Prob"), (f"{spread:+.1f}", "Spread"), (f"{edge:+.1f}", "Edge")])}'
-            f'<div class="extra-meta">{"<br/>".join(meta_lines)}</div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-    st.markdown("---")
-
-
 # ── Shared context passed to every tabs/*.py render(ctx) ──────────────────────
+# Built here (rather than after the favorite-team card) so the favorite-team card and
+# the today-strip below can both use it, side by side, instead of duplicating logic.
 ctx = types.SimpleNamespace(
     df=df, today_df=today_df, strong=strong,
     logos=logos, team_colors=team_colors, rankings=rankings_data, ats_records=ats_records,
@@ -540,36 +460,97 @@ ctx = types.SimpleNamespace(
 )
 
 
+# ── Favorite team highlight + today's games, side by side ────────────────────────
+# Today's Games used to be its own tab, but every stat on it (tier/cover prob/ML/O-U)
+# already has a dedicated home elsewhere — now it's a compact strip up here instead,
+# next to the one other "about you/today" thing on the page.
+_has_fav_card = bool(favorite_team)
+fav_col, today_col = (st.columns([1, 2]) if _has_fav_card else (None, st.container()))
+
+if favorite_team:
+    with fav_col:
+        fav_rows = df[(df["home_team"] == favorite_team) | (df["away_team"] == favorite_team)]
+        if fav_rows.empty:
+            st.info(f"⭐ {favorite_team} isn't playing in this slate.")
+        else:
+            row = fav_rows.iloc[0]
+            tier, home, away       = row["tier"], row["home_team"], row["away_team"]
+            pick_team, cover, edge = row["pick_team"], row["cover_prob"], row["edge_points"]
+            spread                 = row["market_spread_home"]
+            neutral_site           = row.get("neutral_site")
+            venue                  = row.get("venue") or ""
+            game_date              = row.get("start_date") or ""
+            tier_color             = TIER_COLORS.get(tier, ACCENT)
+            tier_text              = tier_badge_text_color(tier)
+            # This card is framed in the fan's own team's brand color (not the tier
+            # color) since it's "your team", not primarily a pick — the pick itself
+            # still shows via the tier-colored glow on whichever logo the model
+            # actually picked, so the two meanings stay visually distinct.
+            fav_color              = team_colors.get(favorite_team) or tier_color
+            if neutral_site is None:
+                site_str = ""
+            elif neutral_site:
+                site_str = f"🏟 {venue}" if venue else "🏟 Neutral Site"
+            else:
+                site_str = f"🏠 {venue}" if venue else "🏠 Home Game"
+
+            # Dim only the side that's neither the favorite nor the model's pick — your
+            # own team never goes black-and-white on its own card, even on weeks the
+            # model likes the other side.
+            away_slot = team_slot_html(
+                f"{model.rank_badge(away, rankings_data)}{away}",
+                logo_img(away, 56, dim=pick_team != away and away != favorite_team),
+                is_pick=pick_team == away, tier_color=tier_color,
+            )
+            home_slot = team_slot_html(
+                f"{model.rank_badge(home, rankings_data)}{home}",
+                logo_img(home, 56, dim=pick_team != home and home != favorite_team),
+                is_pick=pick_team == home, tier_color=tier_color,
+            )
+            meta_lines = [l for l in [site_str, f"🗓 {game_date}" if game_date else ""] if l]
+            st.markdown(
+                f'<div class="matchup-card" style="--tier:{fav_color};">'
+                f'<div class="matchup-card-top">'
+                f'<div class="matchup-rank">⭐ Your Team</div>'
+                f'<div class="tier-badge" style="--tier:{tier_color};--tier-text:{tier_text};">TIER {tier}</div>'
+                f'</div>'
+                f'{team_row_html(away_slot, home_slot)}'
+                f'{stat_row_html([(f"{cover:.0%}", "Cover Prob"), (f"{spread:+.1f}", "Spread"), (f"{edge:+.1f}", "Edge")])}'
+                f'<div class="extra-meta">{"<br/>".join(meta_lines)}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+with today_col:
+    today.render_strip(ctx)
+
+st.markdown("---")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════════════════════════════
-tab0, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "📅  Today's Games",
+tab0, tab1, tab2, tab3, tab4 = st.tabs([
     "🏆  CBS Pick'em Top 12",
-    "🎰  Team Parlays",
-    "💰  Moneylines & O/U",
+    "💰🎰  Markets & Parlays",
     "🥇  Rankings & ATS",
     "📊  Model Accuracy",
     "📈  Stats",
 ])
 
 with tab0:
-    today.render(ctx)
-
-with tab1:
     pickem.render(ctx)
 
-with tab2:
+with tab1:
+    markets.render(ctx)
+    st.markdown("---")
     parlays.render(ctx)
 
-with tab3:
-    markets.render(ctx)
-
-with tab4:
+with tab2:
     rankings.render(ctx)
 
-with tab5:
+with tab3:
     accuracy.render(ctx)
 
-with tab6:
+with tab4:
     stats.render(ctx)

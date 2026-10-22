@@ -44,7 +44,7 @@ def _resolve_top12_source(ctx):
     matched_df, unmatched = cbs_pickem.match_pool_games_to_df(pool_games, ctx.df, known_team_names)
     if matched_df.empty:
         return (ctx.df, "⚠️ None of your pool's games matched this slate — showing the "
-                "full-slate Top 12 instead. Try a different Year/Week in the sidebar.", [])
+                "full-slate Top 12 instead. Try a different Year/Week above.", [])
 
     week_number = next((g["week_number"] for g in pool_games if g.get("week_number")), None)
     week_str = f" (Week {week_number})" if week_number else ""
@@ -52,7 +52,40 @@ def _resolve_top12_source(ctx):
     return matched_df, status, unmatched
 
 
+def _render_slate_summary(ctx):
+    """Slate-level headline numbers (how many games, how many strong picks, the tier mix)
+    — lives here, right above the ranked Top 12 it's summarizing, rather than at the top
+    of the whole app above every tab (where it was before this moved)."""
+    df = ctx.df
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Games",    len(df))
+    c2.metric("Strong Picks",   len(ctx.strong))
+    c3.metric("Tier A Picks",   len(df[df["tier"] == "A"]))
+    c4.metric("Avg Cover Prob", f"{df['cover_prob'].mean():.3f}")
+
+    st.markdown("##### 🎯 This Slate's Confidence")
+    tier_order = ["A", "B", "C", "Pass"]
+    tier_counts = df["tier"].value_counts()
+    tier_bar_segs = "".join(
+        f'<div class="tier-bar-seg" style="flex:{tier_counts.get(t, 0)};background:{TIER_COLORS[t]};"></div>'
+        for t in tier_order
+    )
+    tier_bar_legend = "".join(
+        f'<span><b style="color:{TIER_COLORS[t]}">{tier_counts.get(t, 0)}</b> '
+        f'{"Tier " + t if t != "Pass" else "Pass"}</span>'
+        for t in tier_order
+    )
+    st.markdown(
+        f'<div class="tier-bar">{tier_bar_segs}</div>'
+        f'<div class="tier-bar-legend">{tier_bar_legend}</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption("Share of this slate's games in each tier — more green (Tier A) means more strong plays.")
+    st.markdown("---")
+
+
 def render(ctx):
+    _render_slate_summary(ctx)
     top12_source, cbs_status, cbs_unmatched = _resolve_top12_source(ctx)
 
     st.markdown("## 🏆 CBS Pick'em — Top 12 ATS Picks")
