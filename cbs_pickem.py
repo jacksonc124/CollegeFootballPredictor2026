@@ -28,6 +28,13 @@ from datetime import datetime, timezone
 
 import requests
 
+import pick_log
+
+# Path (within pick_log's shared app_files table) the CBS cookie is stored under when
+# saved via the in-app "Replace CBS cookie" form — see load_cookie_from_supabase's
+# docstring for why this exists.
+COOKIE_STORAGE_PATH = "cbs_cookie.txt"
+
 GRAPHQL_URL = "https://picks.cbssports.com/graphql"
 
 # Captured verbatim from the pool's "Make Picks" page (see module docstring). Sent as a
@@ -302,3 +309,35 @@ def cookie_expiry_warning(cookie: str, now: datetime | None = None, warn_within_
         when = "within a day" if days_left == 0 else f"in {days_left} day(s)"
         return f"⚠️ Your CBS session cookie expires {when} — grab a fresh one soon (see README)."
     return None
+
+
+def load_cookie_from_supabase(supabase_url: str, supabase_key: str) -> str | None:
+    """
+    The CBS session cookie, if one's been saved via the in-app "Replace CBS cookie" form
+    (see tabs/pickem.py) — reused by both app.py (overriding the CBS_COOKIE secret when
+    present) and the weekly Discord push's script, off the same Supabase-backed store
+    pick_log.py already uses for the pick log. This is what makes replacing an expired
+    cookie a one-paste action in the running app instead of editing secrets.toml and
+    redeploying, or separately updating a GitHub Actions secret for the Discord push.
+
+    Returns None if Supabase isn't configured, or nothing's been saved yet (the caller
+    falls back to the CBS_COOKIE secret in that case) — non-fatal on any failure
+    (network, bad key), same as pick_log.sync_from_supabase's own reasoning.
+    """
+    if not (supabase_url and supabase_key):
+        return None
+    try:
+        return pick_log.get_synced_file(COOKIE_STORAGE_PATH, supabase_url, supabase_key)
+    except Exception as e:
+        print(f"Warning: failed to load CBS cookie from Supabase: {e}")
+        return None
+
+
+def save_cookie_to_supabase(cookie: str, supabase_url: str, supabase_key: str) -> None:
+    """
+    Saves a freshly-copied CBS cookie to Supabase so both the Streamlit app (next rerun)
+    and the weekly Discord push (next run) pick it up immediately — no redeploy, no
+    separate GitHub secret update. Raises on failure (network, bad key) so the in-app
+    form can show a real error instead of silently not saving.
+    """
+    pick_log.put_synced_file(COOKIE_STORAGE_PATH, cookie, supabase_url, supabase_key)

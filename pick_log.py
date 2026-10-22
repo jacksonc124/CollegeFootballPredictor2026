@@ -482,6 +482,19 @@ def _supabase_put_file(path: str, content: str, supabase_url: str, supabase_key:
     resp.raise_for_status()
 
 
+def get_synced_file(path: str, supabase_url: str, supabase_key: str) -> str | None:
+    """Public entrypoint for _supabase_get_file — lets other modules (e.g. cbs_pickem.py,
+    for the CBS cookie) reuse the same generic Supabase-backed key/value store this
+    module uses for the pick log, instead of each module reimplementing the same REST
+    calls against the same app_files table."""
+    return _supabase_get_file(path, supabase_url, supabase_key)
+
+
+def put_synced_file(path: str, content: str, supabase_url: str, supabase_key: str) -> None:
+    """Public entrypoint for _supabase_put_file — see get_synced_file's docstring."""
+    _supabase_put_file(path, content, supabase_url, supabase_key)
+
+
 def sync_from_supabase(supabase_url: str, supabase_key: str, log_dir: Path = LOG_DIR,
                         log_file: Path = LOG_FILE, manual_file: Path = MANUAL_RECORDS_FILE) -> None:
     """
