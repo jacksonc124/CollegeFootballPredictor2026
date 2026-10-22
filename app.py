@@ -56,6 +56,10 @@ except Exception:
     cbs_pool_id = os.environ.get("CBS_POOL_ID", "")
     cbs_entry_id = os.environ.get("CBS_ENTRY_ID", "")
 cbs_configured = bool(cbs_cookie and cbs_pool_id and cbs_entry_id)
+# Checked once per rerun (cheap — no network, just decodes the cookie's own JWT claim),
+# so there's a heads-up before the cookie expires instead of just a silent fallback to
+# the full-slate Top 12 the week it finally does.
+cbs_cookie_warning = cbs_pickem.cookie_expiry_warning(cbs_cookie) if cbs_configured else None
 
 
 @st.cache_data(show_spinner=False, ttl=86400)
@@ -515,6 +519,7 @@ ctx = types.SimpleNamespace(
     get_scoreboard=get_scoreboard, get_sp_ratings=get_sp_ratings,
     get_season_backtest=get_season_backtest, get_player_season_stats=get_player_season_stats,
     cbs_configured=cbs_configured, get_cbs_pool_games=get_cbs_pool_games,
+    cbs_cookie_warning=cbs_cookie_warning,
 )
 
 

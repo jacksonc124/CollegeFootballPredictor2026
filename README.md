@@ -94,8 +94,10 @@ CBS_ENTRY_ID = "your-entry-id"
 ```
 
 This cookie is a session token, not your password — it expires (roughly a month, in
-practice) and you'll need to repeat steps 1-3 to get a fresh one when it does. Absent
-entirely, the Pick'em tab works exactly as before (full-slate Top 12 only).
+practice) and you'll need to repeat steps 1-3 to get a fresh one when it does. The
+Pick'em tab shows a warning once it's within 5 days of expiring, so you don't just
+discover it when the pool filtering silently stops working. Absent entirely, the
+Pick'em tab works exactly as before (full-slate Top 12 only).
 
 **This integration is unofficial** — CBS has no public API docs for this, so it was
 built by reverse-engineering a real captured request (see `cbs_pickem.py`'s module
