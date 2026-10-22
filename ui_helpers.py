@@ -13,7 +13,7 @@ import pandas as pd
 
 import model
 
-EASTERN = ZoneInfo("America/New_York")
+CENTRAL = ZoneInfo("America/Chicago")
 
 # Single source of truth for the app's color language (60-30-10 discipline): tier colors
 # mean ONE thing — pick confidence — and appear nowhere else. ACCENT is the neutral color
@@ -43,18 +43,18 @@ DISPLAY_COLUMNS = {
 
 
 def format_game_date(iso_start_date, start_time_tbd) -> str:
-    """Format a UTC ISO start_date (from get_game_info) as an ET date, with time unless TBD."""
+    """Format a UTC ISO start_date (from get_game_info) as a CT date, with time unless TBD."""
     if not iso_start_date:
         return ""
     try:
-        dt_et = datetime.fromisoformat(iso_start_date).astimezone(EASTERN)
+        dt_ct = datetime.fromisoformat(iso_start_date).astimezone(CENTRAL)
     except ValueError:
         return ""
-    date_part = dt_et.strftime("%b %d")
+    date_part = dt_ct.strftime("%b %d")
     if start_time_tbd:
         return date_part
-    time_part = dt_et.strftime("%I:%M %p").lstrip("0")
-    return f"{date_part}, {time_part} ET"
+    time_part = dt_ct.strftime("%I:%M %p").lstrip("0")
+    return f"{date_part}, {time_part} CT"
 
 
 def tier_row_css(tier: str) -> str:

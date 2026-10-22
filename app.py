@@ -9,7 +9,7 @@ import model
 import pick_log
 import ui_helpers
 from tabs import accuracy, markets, parlays, pickem, rankings, stats, today
-from ui_helpers import ACCENT, EASTERN, TIER_COLORS, format_game_date
+from ui_helpers import ACCENT, CENTRAL, TIER_COLORS, format_game_date
 
 # ── page config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="CFB Gambling Model", page_icon="🏈", layout="wide")
@@ -82,10 +82,10 @@ def get_team_conferences(yr):
 
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
-# date.today() is the server's system clock, not Eastern — on a UTC host it flips to
-# "tomorrow" as early as 8pm Eastern, hours before it's actually tomorrow for anyone
-# watching a game. Every "today" in this app needs to mean Eastern-today specifically.
-_today = datetime.now(EASTERN).date()
+# date.today() is the server's system clock, not Central — on a UTC host it flips to
+# "tomorrow" as early as 7pm Central, hours before it's actually tomorrow for anyone
+# watching a game. Every "today" in this app needs to mean Central-today specifically.
+_today = datetime.now(CENTRAL).date()
 default_year, default_week = model.resolve_current_week(get_calendar_cached(_today.year), _today.year, _today)
 
 with st.sidebar:
@@ -114,7 +114,7 @@ with st.sidebar:
         )
 
     today_only = st.checkbox("📅 Today's games only", value=False,
-                             help="Filter to just games kicking off today (in ET, matching the "
+                             help="Filter to just games kicking off today (in CT, matching the "
                                   "kickoff times shown on each card).")
 
     # Both only depend on `year`, fetched here (not in the main fetch block below, which
@@ -365,7 +365,7 @@ if week0_filter != "All":
         st.stop()
 
 if today_only:
-    is_today = df["start_date"].apply(lambda d: model.is_game_on_date(d, _today, EASTERN))
+    is_today = df["start_date"].apply(lambda d: model.is_game_on_date(d, _today, CENTRAL))
     df = df[is_today].reset_index(drop=True)
     if df.empty:
         st.warning("No games today for this slate. Try turning off 'Today's games only'.")
@@ -374,7 +374,7 @@ if today_only:
 # Snapshot for the "Today's Games" landing tab — computed on raw (pre-format) start_date,
 # independent of the "Today's games only" sidebar checkbox, so that tab always reflects
 # literally today regardless of whether the user has that filter on.
-today_df = df[df["start_date"].apply(lambda d: model.is_game_on_date(d, _today, EASTERN))].copy()
+today_df = df[df["start_date"].apply(lambda d: model.is_game_on_date(d, _today, CENTRAL))].copy()
 if not today_df.empty:
     # .apply(axis=1) on an empty DataFrame returns the DataFrame unchanged (not a Series),
     # which breaks the single-column assignment below — only worth doing with rows present.

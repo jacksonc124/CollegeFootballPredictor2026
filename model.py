@@ -579,7 +579,7 @@ def is_game_on_date(iso_start_date: str | None, target_date: date, tz) -> bool:
     Whether a game's ISO start_date (UTC) falls on target_date in the given timezone.
     Not just comparing raw UTC dates — a late-night UTC timestamp can land on the
     previous/next calendar day once converted to US time, so tz should match whatever
-    timezone the UI displays kickoff times in (see app.py's EASTERN / format_game_date)
+    timezone the UI displays kickoff times in (see ui_helpers.py's CENTRAL / format_game_date)
     so "today" means the same thing here as what's shown on each card.
     """
     if not iso_start_date:
