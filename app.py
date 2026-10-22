@@ -4,6 +4,7 @@ from datetime import datetime
 
 import streamlit as st
 
+import cbs_pickem
 import model
 import pick_log
 import ui_helpers
@@ -40,6 +41,21 @@ except Exception:
 if supabase_url and supabase_key and "supabase_synced" not in st.session_state:
     pick_log.sync_from_supabase(supabase_url, supabase_key)
     st.session_state["supabase_synced"] = True
+
+# Optional: lets the Pick'em tab filter its ranked list down to only the games actually in
+# your CBS Sports Pick'em pool (see cbs_pickem.py) — CBS's pool is usually a subset of the
+# week's full slate, not every game. CBS_COOKIE is your browser session (see README for how
+# to grab one; it's a revocable session token, not your password). Absent entirely if never
+# configured — the Pick'em tab just shows the full-slate Top 12 as before.
+try:
+    cbs_cookie = st.secrets["CBS_COOKIE"]
+    cbs_pool_id = st.secrets["CBS_POOL_ID"]
+    cbs_entry_id = st.secrets["CBS_ENTRY_ID"]
+except Exception:
+    cbs_cookie = os.environ.get("CBS_COOKIE", "")
+    cbs_pool_id = os.environ.get("CBS_POOL_ID", "")
+    cbs_entry_id = os.environ.get("CBS_ENTRY_ID", "")
+cbs_configured = bool(cbs_cookie and cbs_pool_id and cbs_entry_id)
 
 
 @st.cache_data(show_spinner=False, ttl=86400)
@@ -272,6 +288,17 @@ def get_player_season_stats(yr, category):
     return model.get_player_season_stats(bearer_token, yr, category, "regular")
 
 
+@st.cache_data(show_spinner=False, ttl=600)
+def get_cbs_pool_games():
+    # Short TTL (10 min, vs. this app's usual 1h) since lines/game status move throughout
+    # game day and this is explicitly about "what's in my pool right now." Non-fatal on
+    # failure — an expired cookie or CBS-side change surfaces as a clear error message in
+    # the Pick'em tab (see cbs_pickem.py's docstring: this is unofficial and unverified
+    # against a live call), not a crashed app.
+    data = cbs_pickem.fetch_pool_games(cbs_cookie, cbs_pool_id, cbs_entry_id)
+    return cbs_pickem.extract_pool_games(data)
+
+
 # ── Fetch ─────────────────────────────────────────────────────────────────────
 with st.spinner("Fetching ratings, lines, and logos…"):
     try:
@@ -487,6 +514,7 @@ ctx = types.SimpleNamespace(
     logo_img=logo_img, fav_star=fav_star,
     get_scoreboard=get_scoreboard, get_sp_ratings=get_sp_ratings,
     get_season_backtest=get_season_backtest, get_player_season_stats=get_player_season_stats,
+    cbs_configured=cbs_configured, get_cbs_pool_games=get_cbs_pool_games,
 )
 
 

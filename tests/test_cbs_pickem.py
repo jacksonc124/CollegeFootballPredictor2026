@@ -1,0 +1,105 @@
+import pandas as pd
+import pytest
+
+from cbs_pickem import extract_pool_games, match_pool_games_to_df, match_team_name
+
+
+def _sample_graphql_data():
+    # Shaped like a real captured response (see cbs_pickem.py's module docstring) —
+    # trimmed to just the fields extract_pool_games actually reads.
+    return {
+        "commonPool": {
+            "poolPeriod": {
+                "poolEvents": [
+                    {
+                        "homeTeam": {"mediumName": "Marshall"},
+                        "awayTeam": {"mediumName": "South Alabama"},
+                        "homeTeamSpread": 3.5,
+                        "gameStatus": "F",
+                        "startsAt": 1792539000000,
+                        "weekNumber": 8,
+                    },
+                    {
+                        "homeTeam": {"mediumName": "Ohio State"},
+                        "awayTeam": {"mediumName": "Kent State"},
+                        "homeTeamSpread": -52.5,
+                        "gameStatus": "P",
+                        "startsAt": 1792612800000,
+                        "weekNumber": 8,
+                    },
+                ]
+            }
+        }
+    }
+
+
+def test_extract_pool_games_flattens_the_response():
+    games = extract_pool_games(_sample_graphql_data())
+    assert len(games) == 2
+    assert games[0] == {
+        "home_team": "Marshall", "away_team": "South Alabama", "home_spread": 3.5,
+        "game_status": "F", "starts_at": 1792539000000, "week_number": 8,
+    }
+    assert games[1]["home_team"] == "Ohio State"
+
+
+def test_extract_pool_games_handles_missing_fields_gracefully():
+    assert extract_pool_games({}) == []
+    assert extract_pool_games({"commonPool": {}}) == []
+    assert extract_pool_games({"commonPool": {"poolPeriod": {}}}) == []
+
+
+def test_match_team_name_exact_match():
+    known = ["Marshall", "South Alabama", "Ohio State"]
+    assert match_team_name("Marshall", known) == "Marshall"
+
+
+def test_match_team_name_fuzzy_match_for_minor_differences():
+    known = ["Miami", "Miami (OH)"]
+    # CBS sometimes spells things slightly differently than CFBD; this should still
+    # resolve to the closer of the two rather than picking the wrong Miami.
+    assert match_team_name("Miami (OH)", known) == "Miami (OH)"
+
+
+def test_match_team_name_returns_none_when_nothing_close():
+    known = ["Marshall", "South Alabama"]
+    assert match_team_name("Some Totally Different School", known) is None
+
+
+def test_match_team_name_handles_missing_name():
+    assert match_team_name(None, ["Marshall"]) is None
+    assert match_team_name("", ["Marshall"]) is None
+
+
+def _sample_df():
+    return pd.DataFrame([
+        {"home_team": "Marshall", "away_team": "South Alabama", "cover_prob": 0.6, "tier": "A"},
+        {"home_team": "Ohio State", "away_team": "Kent State", "cover_prob": 0.52, "tier": "C"},
+        {"home_team": "Georgia", "away_team": "Arkansas", "cover_prob": 0.7, "tier": "A"},  # not in pool
+    ])
+
+
+def test_match_pool_games_to_df_filters_to_only_pool_games():
+    pool_games = extract_pool_games(_sample_graphql_data())
+    known_names = ["Marshall", "South Alabama", "Ohio State", "Kent State", "Georgia", "Arkansas"]
+    matched, unmatched = match_pool_games_to_df(pool_games, _sample_df(), known_names)
+
+    assert len(matched) == 2
+    assert set(matched["home_team"]) == {"Marshall", "Ohio State"}
+    assert unmatched == []
+
+
+def test_match_pool_games_to_df_flags_unmatched_games():
+    pool_games = [{"home_team": "Totally Unknown School", "away_team": "Another Unknown", "home_spread": 1.0}]
+    known_names = ["Marshall", "South Alabama"]
+    matched, unmatched = match_pool_games_to_df(pool_games, _sample_df(), known_names)
+
+    assert matched.empty
+    assert len(unmatched) == 1
+    assert unmatched[0]["home_team"] == "Totally Unknown School"
+
+
+def test_match_pool_games_to_df_empty_df():
+    pool_games = extract_pool_games(_sample_graphql_data())
+    matched, unmatched = match_pool_games_to_df(pool_games, pd.DataFrame(), ["Marshall", "South Alabama"])
+    assert matched.empty
