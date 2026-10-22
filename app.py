@@ -96,29 +96,31 @@ _today = datetime.now(CENTRAL).date()
 default_year, default_week = model.resolve_current_week(get_calendar_cached(_today.year), _today.year, _today)
 
 st.markdown("# 🏈 CFB MODEL")
-bar1, bar2, bar3, bar4, bar5 = st.columns([1, 1.3, 1, 1.2, 1.5])
+
+# Only Year/Week/Favorite Team stay in the always-visible row — on a phone, Streamlit
+# stacks every st.columns() call into one full-width row per widget regardless of how
+# they're grouped, so the real mobile cost is "how many widgets sit outside an
+# expander," not how they're arranged. Postseason and Today-only are real but
+# occasional toggles (a few weeks a year; a few hours on game day), so they move into
+# "More filters" below with Conferences/Home Field — same controls, just fewer rows to
+# scroll past on a phone before reaching any actual picks.
+bar1, bar2, bar3 = st.columns([1, 1, 1.5])
 with bar1:
     year = st.number_input("Year", min_value=2000, max_value=2030, value=default_year, step=1)
 with bar2:
-    postseason = st.checkbox("📬 Postseason / Bowl Games", value=False,
-                             help="Fetches every bowl & CFP game for the selected year, ignoring week. "
-                                  "CFBD groups all of them under one 'week', so the week selector doesn't apply here.")
-with bar3:
     # A dropdown beats a drag-slider for picking one of 15 discrete values on a touchscreen —
-    # a slider needs a precise drag gesture, a dropdown just needs a tap.
+    # a slider needs a precise drag gesture, a dropdown just needs a tap. Not disabled during
+    # postseason (that toggle now lives below this row) — see the "Postseason mode" caption
+    # that appears once it's on, which covers the same "this selector doesn't apply" signal.
     week = st.selectbox(
         "Week", options=list(range(1, 16)), index=default_week - 1,
-        format_func=lambda w: f"Week {w}", disabled=postseason,
+        format_func=lambda w: f"Week {w}",
     )
-with bar4:
-    today_only = st.checkbox("📅 Today's games only", value=False,
-                             help="Filter to just games kicking off today (in CT, matching the "
-                                  "kickoff times shown on each card).")
 
-# Both only depend on `year`, fetched here (not in the main fetch block below, which
-# doesn't run until after this control bar) so these controls have real options on first
-# render. Caught broadly and degraded to "no options" rather than crashing the page —
-# e.g. if cfbd isn't installed yet, that's reported by the friendlier check further down.
+# Only depends on `year`, fetched here (not in the main fetch block below, which doesn't
+# run until after this control bar) so these controls have real options on first render.
+# Caught broadly and degraded to "no options" rather than crashing the page — e.g. if
+# cfbd isn't installed yet, that's reported by the friendlier check further down.
 try:
     _sidebar_team_names = sorted(get_team_logos(year).keys())
     _sidebar_conferences = sorted(set(get_team_conferences(year).values()))
@@ -126,7 +128,7 @@ except Exception as e:
     print(f"Warning: failed to load team/conference options for the control bar: {e}")
     _sidebar_team_names, _sidebar_conferences = [], []
 
-with bar5:
+with bar3:
     # No login system exists here, so there's no per-user account to attach this to —
     # the closest real equivalent is making it sticky for this browser via the URL's
     # query string, which survives reloads and works from a bookmark. Query params are
@@ -149,19 +151,20 @@ with bar5:
     else:
         st.query_params["favorite_team"] = favorite_team
 
-week0_filter = "All"
-if week == 1 and not postseason:
-    week0_filter = st.radio(
-        "Week 1 slate", ["All", "Week 0 only", "Week 1 only"], horizontal=True,
-        help="CFBD lumps the early season-opening games (what fans call 'Week 0') and the "
-             "Labor Day weekend slate together under one 'week 1' — there's no such split in "
-             "their data. This filters by actual game date instead (cutoff: the Thursday "
-             "before Labor Day).",
-    )
-
-# Conferences and Home Field Advantage are lower-frequency tweaks than the controls
-# above, so they're tucked into an expander rather than taking up a permanent row.
+# Postseason/Today-only (occasional toggles) + Conferences/Home Field (rarely-touched
+# tuning knobs) all live here now — tucked into one expander rather than four permanent
+# rows above it.
 with st.expander("⚙️ More filters & advanced"):
+    filt1, filt2 = st.columns(2)
+    with filt1:
+        postseason = st.checkbox("📬 Postseason / Bowl Games", value=False,
+                                 help="Fetches every bowl & CFP game for the selected year, ignoring week. "
+                                      "CFBD groups all of them under one 'week', so the week selector doesn't apply here.")
+    with filt2:
+        today_only = st.checkbox("📅 Today's games only", value=False,
+                                 help="Filter to just games kicking off today (in CT, matching the "
+                                      "kickoff times shown on each card).")
+
     adv1, adv2 = st.columns([3, 1])
     with adv1:
         selected_conferences = st.multiselect(
@@ -178,6 +181,20 @@ with st.expander("⚙️ More filters & advanced"):
                  "from the postseason toggle. CFP first-round games are true home games for the higher seed, "
                  "so they still get this value.",
         )
+
+if postseason:
+    st.caption("📬 Postseason mode — the Week selector above is ignored; every bowl & CFP game for "
+               "this year is fetched instead.")
+
+week0_filter = "All"
+if week == 1 and not postseason:
+    week0_filter = st.radio(
+        "Week 1 slate", ["All", "Week 0 only", "Week 1 only"], horizontal=True,
+        help="CFBD lumps the early season-opening games (what fans call 'Week 0') and the "
+             "Labor Day weekend slate together under one 'week 1' — there's no such split in "
+             "their data. This filters by actual game date instead (cutoff: the Thursday "
+             "before Labor Day).",
+    )
 
 st.markdown(
     f'<div class="fetch-caption">📡 Fetching <b>{year} · '
