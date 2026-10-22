@@ -9,68 +9,57 @@ import pick_log
 from ui_helpers import ACCENT, DISPLAY_COLUMNS, TIER_COLORS, tier_row_css
 
 
-def _render_cbs_pool_section(ctx):
+def _resolve_top12_source(ctx):
     """
-    Filters the ranked Top 12 down to only the games actually in this user's CBS Sports
-    Pick'em pool — CBS's pool is usually a subset of the week's full slate (e.g. 17 of
-    ~60 games), not every game, so the full-slate Top 12 above can include picks that
-    aren't even an option in the real pool. See cbs_pickem.py: this is an unofficial
-    integration built from a captured request, not CBS's documented API.
+    Decide which DataFrame the Top 12 should be ranked from: the user's actual CBS
+    Pick'em pool (ctx.df filtered to just those games) when CBS is configured and
+    reachable, falling back to the full slate otherwise — CBS not being set up,
+    erroring out, or simply having no games for the current slate are all equally valid
+    reasons to fall back, not failures to surface as a broken page. Returns
+    (df, status, unmatched): status is a short caption describing which mode is active
+    (None when CBS isn't configured at all, since there's nothing to report), and
+    unmatched lists any pool game that couldn't be matched to a model row (only
+    meaningful when the pool mode is actually active).
+
+    See cbs_pickem.py: this is an unofficial integration built from a captured request,
+    not CBS's documented API, so a fetch failure here is expected to happen sometimes.
     """
-    st.markdown("### 🔒 My CBS Pool")
     if not ctx.cbs_configured:
-        st.caption("Not set up yet — add CBS_COOKIE, CBS_POOL_ID, and CBS_ENTRY_ID secrets "
-                   "to filter the list above down to only games actually in your CBS pool. "
-                   "See the README for how to get these from your browser.")
-        return
+        return ctx.df, None, []
 
     try:
         with st.spinner("Fetching your CBS pool's games…"):
             pool_games = ctx.get_cbs_pool_games()
     except Exception as e:
-        st.error(f"Couldn't fetch your CBS pool ({e}). Your session cookie may have "
-                 "expired — see the README for how to grab a fresh one.")
-        return
+        return ctx.df, f"⚠️ Couldn't reach your CBS pool ({e}) — showing the full-slate Top 12 instead.", []
 
     if not pool_games:
-        st.info("CBS returned no games for this pool's current period.")
-        return
+        return (ctx.df, "⚠️ CBS returned no games for this pool's current period — "
+                "showing the full-slate Top 12 instead.", [])
 
     known_team_names = set(ctx.logos.keys())
     matched_df, unmatched = cbs_pickem.match_pool_games_to_df(pool_games, ctx.df, known_team_names)
-    week_number = next((g["week_number"] for g in pool_games if g.get("week_number")), None)
-    week_str = f" · Week {week_number}" if week_number else ""
-    st.caption(f"{len(pool_games)} game(s) in your pool{week_str} · "
-               f"{len(matched_df)} matched to this slate's model picks.")
-
     if matched_df.empty:
-        st.warning("None of your pool's games matched this slate — try a different "
-                   "Year/Week in the sidebar to match your pool's actual week.")
-    else:
-        top_pool = matched_df[matched_df["tier"] != "Pass"].sort_values(
-            "cover_prob", ascending=False
-        ).reset_index(drop=True)
-        display = top_pool.rename(columns=DISPLAY_COLUMNS)[
-            ["Home", "Away", "Market Spread", "Pick", "Cover Prob", "Edge (pts)", "Tier"]
-        ]
-        st.dataframe(
-            display, use_container_width=True, hide_index=True,
-            column_config={
-                "Cover Prob": st.column_config.ProgressColumn("Cover Prob", min_value=0.0, max_value=1.0),
-                "Edge (pts)": st.column_config.NumberColumn("Edge (pts)", format="%+.1f"),
-                "Market Spread": st.column_config.NumberColumn("Market Spread", format="%+.1f"),
-            },
-        )
+        return (ctx.df, "⚠️ None of your pool's games matched this slate — showing the "
+                "full-slate Top 12 instead. Try a different Year/Week in the sidebar.", [])
 
-    if unmatched:
-        with st.expander(f"⚠️ {len(unmatched)} pool game(s) couldn't be matched — check manually"):
-            for g in unmatched:
-                st.caption(f"{g.get('away_team') or '?'} @ {g.get('home_team') or '?'}")
+    week_number = next((g["week_number"] for g in pool_games if g.get("week_number")), None)
+    week_str = f" (Week {week_number})" if week_number else ""
+    status = f"🔒 Filtered to your {len(matched_df)}-game CBS pool{week_str}."
+    return matched_df, status, unmatched
 
 
 def render(ctx):
+    top12_source, cbs_status, cbs_unmatched = _resolve_top12_source(ctx)
+
     st.markdown("## 🏆 CBS Pick'em — Top 12 ATS Picks")
     st.caption("Ranked by cover probability · Against the spread")
+    if cbs_status:
+        st.caption(cbs_status)
+    if cbs_unmatched:
+        with st.expander(f"⚠️ {len(cbs_unmatched)} pool game(s) couldn't be matched — check manually"):
+            for g in cbs_unmatched:
+                st.caption(f"{g.get('away_team') or '?'} @ {g.get('home_team') or '?'}")
 
     log_col, btn_col = st.columns([4, 1])
     with log_col:
@@ -93,7 +82,7 @@ def render(ctx):
     st.markdown("---")
 
     df = ctx.df
-    top12 = (df[df["tier"] != "Pass"]
+    top12 = (top12_source[top12_source["tier"] != "Pass"]
              .sort_values("cover_prob", ascending=False)
              .head(12).reset_index(drop=True))
 
@@ -153,9 +142,6 @@ def render(ctx):
             )
         cards_html += "</div>"
         st.markdown(cards_html, unsafe_allow_html=True)
-
-    st.markdown("---")
-    _render_cbs_pool_section(ctx)
 
     st.markdown("---")
     st.markdown("## 📋 All Games")
