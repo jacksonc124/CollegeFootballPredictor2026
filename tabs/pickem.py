@@ -207,6 +207,21 @@ def render(ctx):
     table_df["Away ATS"] = table_df["Away"].map(lambda t: model.ats_record_str(t, ctx.ats_records))
     table_df["Home"] = table_df["Home"].map(lambda t: f"{ctx.fav_star(t)}{model.rank_badge(t, ctx.rankings)}{t}")
     table_df["Away"] = table_df["Away"].map(lambda t: f"{ctx.fav_star(t)}{model.rank_badge(t, ctx.rankings)}{t}")
+
+    # This table's whole job is the ATS picture — moneyline/O-U internals (ml_edge,
+    # home_moneyline, predicted_total, weather/opponent adjustments, ...) already have a
+    # dedicated home on the Gambling tab, so they're left out here rather than tagging
+    # along just because they exist on the row. On a phone, a dataframe this wide was the
+    # single worst offender for "scroll sideways to read anything" — cutting it to only
+    # what this tab is actually about fixes that directly, not just cosmetically.
+    all_games_columns = [
+        "Tier", "Pick", "Away", "Home", "Edge (pts)", "Cover Prob",
+        "Market Spread", "Model Spread", "Away ATS", "Home ATS",
+        "Best Spread", "Best Spread Book", "Neutral Site", "Date", "Venue", "Game",
+        "SP+ Away", "SP+ Home", "Provider",
+    ]
+    table_df = table_df[[c for c in all_games_columns if c in table_df.columns]]
+
     st.dataframe(
         table_df.style.apply(_shade_row, axis=1),
         use_container_width=True, height=min(50 + 35 * len(filtered), 600),
@@ -221,11 +236,9 @@ def render(ctx):
             "Best Spread": st.column_config.NumberColumn("Best Spread", format="%+.1f",
                                                            help="Best available spread across every book CFBD returned "
                                                                 "for whichever side the model picked ATS."),
-            "Best ML": st.column_config.NumberColumn("Best ML", format="%+.0f",
-                                                       help="Best available moneyline price across every book CFBD "
-                                                            "returned for whichever side the model picked straight-up."),
         },
     )
+    st.caption("Moneyline/O-U detail for these same games lives on the Gambling tab.")
     st.markdown("---")
     dl1, dl2 = st.columns(2)
     with dl1:
