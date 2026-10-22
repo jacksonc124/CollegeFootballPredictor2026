@@ -116,7 +116,7 @@ streamlit run app.py
 - `model.py` — shared fetchers (SP+ ratings, betting lines, team logos), math helpers, and pick-building logic used by both entry points below.
 - `app.py` — Streamlit dashboard orchestrator (secrets, top control bar, fetch/filter pipeline, tab dispatch).
 - `ui_helpers.py` — pure presentation helpers (formatting, CSS, the parlay leg-pool builder) shared across `tabs/`.
-- `tabs/` — one module per dashboard tab (Today's Games, Pick'em, Parlays, Moneylines & O/U, Rankings & ATS, Model Accuracy, Stats).
+- `tabs/` — one module per dashboard tab (Pick'em, Markets & Parlays, Rankings & ATS, Model Accuracy, Stats); `tabs/today.py` renders the compact "today's games" strip above the tabs rather than a tab of its own.
 - `cbs_pickem.py` — optional CBS Pick'em pool integration (see above).
 - `cfbpredict.py` — CLI script that prints picks and saves them to CSV.
 - `backtest.py` — grades a past week's picks against actual final scores and reports accuracy/calibration by tier. Run with `python backtest.py <year> <week> [season_type]`.

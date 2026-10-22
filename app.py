@@ -436,68 +436,14 @@ def logo_img(team, size=32, dim=False):
 
 
 def fav_star(team: str) -> str:
-    """A small marker for the sidebar's favorite team, prefixed the same way rank_badge()
+    """A small marker for the favorite team, prefixed the same way rank_badge()
     prefixes AP/Coaches rank — so it's visible in any listing without a dedicated card."""
     return "⭐ " if favorite_team and team == favorite_team else ""
 
 
-# ── Favorite team highlight ──────────────────────────────────────────────────────
-if favorite_team:
-    fav_rows = df[(df["home_team"] == favorite_team) | (df["away_team"] == favorite_team)]
-    if fav_rows.empty:
-        st.info(f"⭐ {favorite_team} isn't playing in this slate.")
-    else:
-        row = fav_rows.iloc[0]
-        tier, home, away       = row["tier"], row["home_team"], row["away_team"]
-        pick_team, cover, edge = row["pick_team"], row["cover_prob"], row["edge_points"]
-        spread                 = row["market_spread_home"]
-        neutral_site           = row.get("neutral_site")
-        venue                  = row.get("venue") or ""
-        game_date              = row.get("start_date") or ""
-        tier_color             = TIER_COLORS.get(tier, ACCENT)
-        tier_text              = tier_badge_text_color(tier)
-        # This card is framed in the fan's own team's brand color (not the tier color)
-        # since it's "your team", not primarily a pick — the pick itself still shows via
-        # the tier-colored glow on whichever logo the model actually picked, so the two
-        # meanings (team identity vs. pick confidence) stay visually distinct.
-        fav_color              = team_colors.get(favorite_team) or tier_color
-        if neutral_site is None:
-            site_str = ""
-        elif neutral_site:
-            site_str = f"🏟 {venue}" if venue else "🏟 Neutral Site"
-        else:
-            site_str = f"🏠 {venue}" if venue else "🏠 Home Game"
-
-        # Dim only the side that's neither the favorite nor the model's pick — your own
-        # team never goes black-and-white on its own card, even on weeks the model likes
-        # the other side.
-        away_slot = team_slot_html(
-            f"{model.rank_badge(away, rankings_data)}{away}",
-            logo_img(away, 56, dim=pick_team != away and away != favorite_team),
-            is_pick=pick_team == away, tier_color=tier_color,
-        )
-        home_slot = team_slot_html(
-            f"{model.rank_badge(home, rankings_data)}{home}",
-            logo_img(home, 56, dim=pick_team != home and home != favorite_team),
-            is_pick=pick_team == home, tier_color=tier_color,
-        )
-        meta_lines = [l for l in [site_str, f"🗓 {game_date}" if game_date else ""] if l]
-        st.markdown(
-            f'<div class="matchup-card" style="--tier:{fav_color};max-width:420px;">'
-            f'<div class="matchup-card-top">'
-            f'<div class="matchup-rank">⭐ Your Team</div>'
-            f'<div class="tier-badge" style="--tier:{tier_color};--tier-text:{tier_text};">TIER {tier}</div>'
-            f'</div>'
-            f'{team_row_html(away_slot, home_slot)}'
-            f'{stat_row_html([(f"{cover:.0%}", "Cover Prob"), (f"{spread:+.1f}", "Spread"), (f"{edge:+.1f}", "Edge")])}'
-            f'<div class="extra-meta">{"<br/>".join(meta_lines)}</div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-    st.markdown("---")
-
-
 # ── Shared context passed to every tabs/*.py render(ctx) ──────────────────────
+# Built here (rather than after the favorite-team card) so the favorite-team card and
+# the today-strip below can both use it, side by side, instead of duplicating logic.
 ctx = types.SimpleNamespace(
     df=df, today_df=today_df, strong=strong,
     logos=logos, team_colors=team_colors, rankings=rankings_data, ats_records=ats_records,
@@ -514,36 +460,97 @@ ctx = types.SimpleNamespace(
 )
 
 
+# ── Favorite team highlight + today's games, side by side ────────────────────────
+# Today's Games used to be its own tab, but every stat on it (tier/cover prob/ML/O-U)
+# already has a dedicated home elsewhere — now it's a compact strip up here instead,
+# next to the one other "about you/today" thing on the page.
+_has_fav_card = bool(favorite_team)
+fav_col, today_col = (st.columns([1, 2]) if _has_fav_card else (None, st.container()))
+
+if favorite_team:
+    with fav_col:
+        fav_rows = df[(df["home_team"] == favorite_team) | (df["away_team"] == favorite_team)]
+        if fav_rows.empty:
+            st.info(f"⭐ {favorite_team} isn't playing in this slate.")
+        else:
+            row = fav_rows.iloc[0]
+            tier, home, away       = row["tier"], row["home_team"], row["away_team"]
+            pick_team, cover, edge = row["pick_team"], row["cover_prob"], row["edge_points"]
+            spread                 = row["market_spread_home"]
+            neutral_site           = row.get("neutral_site")
+            venue                  = row.get("venue") or ""
+            game_date              = row.get("start_date") or ""
+            tier_color             = TIER_COLORS.get(tier, ACCENT)
+            tier_text              = tier_badge_text_color(tier)
+            # This card is framed in the fan's own team's brand color (not the tier
+            # color) since it's "your team", not primarily a pick — the pick itself
+            # still shows via the tier-colored glow on whichever logo the model
+            # actually picked, so the two meanings stay visually distinct.
+            fav_color              = team_colors.get(favorite_team) or tier_color
+            if neutral_site is None:
+                site_str = ""
+            elif neutral_site:
+                site_str = f"🏟 {venue}" if venue else "🏟 Neutral Site"
+            else:
+                site_str = f"🏠 {venue}" if venue else "🏠 Home Game"
+
+            # Dim only the side that's neither the favorite nor the model's pick — your
+            # own team never goes black-and-white on its own card, even on weeks the
+            # model likes the other side.
+            away_slot = team_slot_html(
+                f"{model.rank_badge(away, rankings_data)}{away}",
+                logo_img(away, 56, dim=pick_team != away and away != favorite_team),
+                is_pick=pick_team == away, tier_color=tier_color,
+            )
+            home_slot = team_slot_html(
+                f"{model.rank_badge(home, rankings_data)}{home}",
+                logo_img(home, 56, dim=pick_team != home and home != favorite_team),
+                is_pick=pick_team == home, tier_color=tier_color,
+            )
+            meta_lines = [l for l in [site_str, f"🗓 {game_date}" if game_date else ""] if l]
+            st.markdown(
+                f'<div class="matchup-card" style="--tier:{fav_color};">'
+                f'<div class="matchup-card-top">'
+                f'<div class="matchup-rank">⭐ Your Team</div>'
+                f'<div class="tier-badge" style="--tier:{tier_color};--tier-text:{tier_text};">TIER {tier}</div>'
+                f'</div>'
+                f'{team_row_html(away_slot, home_slot)}'
+                f'{stat_row_html([(f"{cover:.0%}", "Cover Prob"), (f"{spread:+.1f}", "Spread"), (f"{edge:+.1f}", "Edge")])}'
+                f'<div class="extra-meta">{"<br/>".join(meta_lines)}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+with today_col:
+    today.render_strip(ctx)
+
+st.markdown("---")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════════════════════════════
-tab0, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "📅  Today's Games",
+tab0, tab1, tab2, tab3, tab4 = st.tabs([
     "🏆  CBS Pick'em Top 12",
-    "🎰  Team Parlays",
-    "💰  Moneylines & O/U",
+    "💰🎰  Markets & Parlays",
     "🥇  Rankings & ATS",
     "📊  Model Accuracy",
     "📈  Stats",
 ])
 
 with tab0:
-    today.render(ctx)
-
-with tab1:
     pickem.render(ctx)
 
-with tab2:
+with tab1:
+    markets.render(ctx)
+    st.markdown("---")
     parlays.render(ctx)
 
-with tab3:
-    markets.render(ctx)
-
-with tab4:
+with tab2:
     rankings.render(ctx)
 
-with tab5:
+with tab3:
     accuracy.render(ctx)
 
-with tab6:
+with tab4:
     stats.render(ctx)

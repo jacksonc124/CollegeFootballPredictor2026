@@ -1,119 +1,61 @@
-"""Tab 0: Today's Games — everything kicking off today, spread/moneylines/O-U side by side."""
+"""A compact strip of today's games, pinned above the tabs next to the favorite-team
+card — not a full tab of its own. Every stat here (tier, cover prob, spread, ML, O/U)
+already has a dedicated home (Pick'em, Moneylines & O/U), so this only answers "what's
+on today, and what's the score right now": logos + names once, the score once the game
+is underway, and a time/status strip. No repeated team-name mentions, no tier badge,
+no stat row."""
 
-import pandas as pd
 import streamlit as st
 
 import backtest
-import model
-from ui_helpers import (
-    ACCENT, OUTCOME_COLORS, TIER_COLORS, stat_row_html, team_row_html,
-    team_slot_html, tier_badge_text_color,
-)
+from ui_helpers import ACCENT, TIER_COLORS, team_row_html, team_slot_html
 
 
-def render(ctx):
-    st.markdown(f"## 📅 Today's Games — {ctx.today.strftime('%A, %B %d')}")
-    st.caption("Everything kicking off today, spread/moneylines/O-U side by side · "
-               "full detail (parlays, rankings, accuracy) lives in the other tabs.")
-
+def render_strip(ctx):
     if ctx.today_df.empty:
-        st.info("No games today in the slate currently selected above. "
-                "Adjust Year/Week there to jump to a different day.")
         return
 
-    today_df = ctx.today_df
-    has_ml = "home_moneyline" in today_df.columns
-    has_total = "market_total" in today_df.columns
     scoreboard = ctx.get_scoreboard(tuple(ctx.logos.keys()))
+    st.markdown(f"##### 📅 Today — {ctx.today.strftime('%A, %B %d')}")
 
-    today_cards_html = '<div class="today-grid">'
-    for _, row in today_df.iterrows():
+    cards_html = '<div class="today-strip">'
+    for _, row in ctx.today_df.iterrows():
         tier, home, away = row["tier"], row["home_team"], row["away_team"]
-        pick_team, cover  = row["pick_team"], row["cover_prob"]
-        spread            = row["market_spread_home"]
-        tier_color        = TIER_COLORS.get(tier, ACCENT)
+        pick_team, spread = row["pick_team"], row["market_spread_home"]
+        tier_color = TIER_COLORS.get(tier, ACCENT)
 
-        stats_html = ""
-        if has_ml and pd.notna(row.get("home_moneyline")):
-            stats_html += (
-                f'<div><span class="today-stat-label">Home ML</span>'
-                f'<span class="today-stat-value">{row["home_moneyline"]:+.0f}</span></div>'
-                f'<div><span class="today-stat-label">Away ML</span>'
-                f'<span class="today-stat-value">{row["away_moneyline"]:+.0f}</span></div>'
-            )
-        if has_total and pd.notna(row.get("market_total")):
-            stats_html += (
-                f'<div><span class="today-stat-label">O/U Line</span>'
-                f'<span class="today-stat-value">{row["market_total"]:.1f}</span></div>'
-            )
-            if pd.notna(row.get("total_pick")) and row["total_pick"]:
-                stats_html += (
-                    f'<div><span class="today-stat-label">Total Pick</span>'
-                    f'<span class="today-stat-value">{row["total_pick"]}</span></div>'
-                )
-
-        # Live score, when the scoreboard has this game and it's actually underway —
-        # a "scheduled" game (the common case pre-kickoff) gets no extra line at all,
-        # same as before this feature existed.
+        # Pre-kickoff: no score yet, just the kickoff time as the whole "time strip".
+        # Live/final: the score takes over as its own row, and the time strip becomes
+        # a short status instead (quarter+clock, or FINAL) rather than restating names.
+        time_label, status_class, score_html = row["start_date"], "", ""
         live = scoreboard.get((home, away))
-        live_html = ""
         if live and live.get("home_points") is not None and live.get("away_points") is not None:
             hp, ap = int(live["home_points"]), int(live["away_points"])
+            score_html = f'<div class="today-strip-score"><span>{ap}</span><span>{hp}</span></div>'
             status = live.get("status")
             if status == "in_progress":
-                clock_str = (f"Q{live['period']} {live['clock']}"
-                             if live.get("period") and live.get("clock") else "In Progress")
-                # "Currently covering" against the live (not final) score — same
-                # grade_pick() math as the final-score case, just fed a score that can
-                # still change. Colored, but deliberately labeled "(live)" everywhere
-                # it appears so it's never mistaken for the graded, final result.
-                cover_html = ""
-                if spread is not None and pick_team:
-                    live_outcome = backtest.grade_pick(pick_team, home, away, spread, hp, ap)
-                    cover_label = {"win": "Covering", "loss": "Not Covering", "push": "Push"}.get(live_outcome)
-                    if cover_label:
-                        color = OUTCOME_COLORS.get(live_outcome, "")
-                        style = f' style="color:{color};"' if color else ""
-                        cover_html = f' · <span{style}>{cover_label} (live)</span>'
-                live_html = (f'<div class="today-live status-live">🔴 LIVE · {clock_str} · '
-                             f'{away} {ap} — {home} {hp}{cover_html}</div>')
+                status_class = "status-live"
+                time_label = (f"Q{live['period']} {live['clock']}"
+                              if live.get("period") and live.get("clock") else "LIVE")
             elif status == "completed":
                 # Reuses the exact same grading logic as Game-by-game results, so "did
                 # the pick win" always means the same thing everywhere in the app.
                 outcome = (backtest.grade_pick(pick_team, home, away, spread, hp, ap)
                            if spread is not None and pick_team else None)
-                label = {"win": "✅ Pick Won", "loss": "❌ Pick Lost", "push": "🟰 Push"}.get(outcome, "Final")
-                css_class = {"win": "status-final-win", "loss": "status-final-loss",
-                              "push": "status-final-push"}.get(outcome, "status-final-push")
-                live_html = (f'<div class="today-live {css_class}">🏁 FINAL {away} {ap} — '
-                             f'{home} {hp} · {label}</div>')
+                status_class = {"win": "status-final-win", "loss": "status-final-loss",
+                                 "push": "status-final-push"}.get(outcome, "status-final-push")
+                time_label = "FINAL"
 
-        tier_text = tier_badge_text_color(tier)
-        away_slot = team_slot_html(
-            f"{ctx.fav_star(away)}{model.rank_badge(away, ctx.rankings)}{away}",
-            ctx.logo_img(away, 56, dim=pick_team == home),
-            is_pick=pick_team == away, tier_color=tier_color,
-        )
-        home_slot = team_slot_html(
-            f"{ctx.fav_star(home)}{model.rank_badge(home, ctx.rankings)}{home}",
-            ctx.logo_img(home, 56, dim=pick_team == away),
-            is_pick=pick_team == home, tier_color=tier_color,
-        )
-        spread_tile_val = f"{spread:+.1f}" if spread is not None else "—"
-        today_cards_html += (
-            f'<div class="matchup-card" style="--tier:{tier_color};--tier-text:{tier_text};">'
-            f'<div class="matchup-card-top">'
-            f'<div class="matchup-rank">🗓 {row["start_date"]}</div>'
-            f'<div class="tier-badge">TIER {tier}</div>'
-            f'</div>'
+        away_slot = team_slot_html(away, ctx.logo_img(away, 36, dim=pick_team == home),
+                                    is_pick=pick_team == away, tier_color=tier_color)
+        home_slot = team_slot_html(home, ctx.logo_img(home, 36, dim=pick_team == away),
+                                    is_pick=pick_team == home, tier_color=tier_color)
+        cards_html += (
+            f'<div class="today-strip-card" style="--tier:{tier_color};">'
             f'{team_row_html(away_slot, home_slot)}'
-            f'{live_html}'
-            f'{stat_row_html([(f"{cover:.0%}", "Cover Prob"), (spread_tile_val, "Spread")])}'
-            f'<div class="extra-meta">&#10003; ATS Pick: <b>{model.rank_badge(pick_team, ctx.rankings)}{pick_team}</b></div>'
-            f'<div class="today-stats">{stats_html}</div>'
+            f'{score_html}'
+            f'<div class="today-strip-time {status_class}">{time_label}</div>'
             f'</div>'
         )
-    today_cards_html += "</div>"
-    st.markdown(today_cards_html, unsafe_allow_html=True)
-    st.caption(f"{len(today_df)} game(s) today · sorted as returned by the lines provider — "
-               "see the Pick'em tab for a ranked top 12.")
+    cards_html += "</div>"
+    st.markdown(cards_html, unsafe_allow_html=True)

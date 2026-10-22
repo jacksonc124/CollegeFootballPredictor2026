@@ -270,14 +270,41 @@ STYLES = """
     }
     .today-stat-label { color: #8a909c; }
     .today-stat-value { font-weight: 600; color: #e5e7eb; }
-    .today-live {
-        font-size: 12px; font-weight: 600; margin-top: 2px; padding: 3px 8px;
-        border-radius: 4px; display: inline-block;
+
+    /* Compact "what's on today" strip, pinned above the tabs next to the favorite-team
+       card — smaller and leaner than the full matchup cards on purpose: no tier badge,
+       no stat row, no repeated "ATS Pick: TeamName" text. Reuses .team-row/.team-slot
+       at a smaller scale (logos+names once), then a score row once the game is
+       underway, then a one-line time/status strip. */
+    .today-strip {
+        display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+        gap: 10px; margin-top: 8px;
     }
-    .today-live.status-live { background: #ef444422; color: #ef4444; }
-    .today-live.status-final-win { background: #22c55e22; color: #22c55e; }
-    .today-live.status-final-loss { background: #ef444422; color: #ef4444; }
-    .today-live.status-final-push { background: rgba(128,128,128,0.15); color: #9ca3af; }
+    .today-strip-card {
+        border-radius: 12px; background: #10131c;
+        border: 2px solid var(--tier, rgba(255,255,255,.1));
+        padding: 12px 14px 10px; display: flex; flex-direction: column; gap: 6px;
+        box-shadow: 0 12px 24px -18px rgba(0,0,0,.8);
+    }
+    .today-strip .team-row { gap: 10px; margin: 4px 0 2px; }
+    .today-strip .team-slot { padding-top: 14px; gap: 4px; }
+    .today-strip .team-slot-name { font-size: 11px; }
+    .today-strip .pick-flag { font-size: 8px; padding: 1px 6px; }
+    .today-strip .at-sep { display: none; }
+    .today-strip-score {
+        display: flex; justify-content: space-around; align-items: baseline;
+        font-family: 'Anton', sans-serif; font-weight: 400; font-size: 22px; color: #fff;
+    }
+    .today-strip-time {
+        text-align: center; font-family: 'Barlow Condensed', sans-serif; font-weight: 600;
+        font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: #8a909c;
+        border-top: 1px solid rgba(255,255,255,.08); padding-top: 6px;
+    }
+    .today-strip-time.status-live { color: #ef4444; }
+    .today-strip-time.status-final-win { color: #22c55e; }
+    .today-strip-time.status-final-loss { color: #ef4444; }
+    .today-strip-time.status-final-push { color: #9ca3af; }
+
     .total-pick-line {
         font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 16px;
         color: #fff; text-align: center; margin-top: 4px;
