@@ -11,6 +11,7 @@ from cbs_pickem import (
     extract_pool_games,
     match_pool_games_to_df,
     match_team_name,
+    resolve_top12_source,
 )
 
 
@@ -151,6 +152,44 @@ def test_match_pool_games_to_df_empty_df():
     pool_games = extract_pool_games(_sample_graphql_data())
     matched, unmatched = match_pool_games_to_df(pool_games, pd.DataFrame(), ["Marshall", "South Alabama"])
     assert matched.empty
+
+
+def _known_names():
+    return ["Marshall", "South Alabama", "Ohio State", "Kent State", "Georgia", "Arkansas"]
+
+
+def test_resolve_top12_source_falls_back_when_fetch_raises():
+    def boom():
+        raise RuntimeError("expired cookie")
+    df, status, unmatched = resolve_top12_source(_sample_df(), _known_names(), boom)
+    assert df.equals(_sample_df())
+    assert "expired cookie" in status
+    assert "full-slate Top 12" in status
+    assert unmatched == []
+
+
+def test_resolve_top12_source_falls_back_when_no_pool_games_returned():
+    df, status, unmatched = resolve_top12_source(_sample_df(), _known_names(), lambda: [])
+    assert "no games" in status
+    assert "full-slate Top 12" in status
+
+
+def test_resolve_top12_source_falls_back_when_pool_games_match_nothing():
+    pool_games = [{"home_team": "Totally Unknown", "away_team": "Also Unknown"}]
+    df, status, unmatched = resolve_top12_source(_sample_df(), _known_names(), lambda: pool_games)
+    assert "None of your pool's games matched" in status
+    assert "full-slate Top 12" in status
+
+
+def test_resolve_top12_source_uses_pool_filtered_df_on_success():
+    pool_games = extract_pool_games(_sample_graphql_data())  # Marshall/South Alabama + Ohio State/Kent State
+    df, status, unmatched = resolve_top12_source(_sample_df(), _known_names(), lambda: pool_games)
+
+    assert len(df) == 2
+    assert set(df["home_team"]) == {"Marshall", "Ohio State"}
+    assert "Filtered to your 2-game CBS pool" in status
+    assert "Week 8" in status
+    assert unmatched == []
 
 
 def test_cookie_expiry_reads_the_exp_claim():

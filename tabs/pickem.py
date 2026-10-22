@@ -14,15 +14,11 @@ from ui_helpers import (
 
 def _resolve_top12_source(ctx):
     """
-    Decide which DataFrame the Top 12 should be ranked from: the user's actual CBS
-    Pick'em pool (ctx.df filtered to just those games) when CBS is configured and
-    reachable, falling back to the full slate otherwise — CBS not being set up,
-    erroring out, or simply having no games for the current slate are all equally valid
-    reasons to fall back, not failures to surface as a broken page. Returns
-    (df, status, unmatched): status is a short caption describing which mode is active
-    (None when CBS isn't configured at all, since there's nothing to report), and
-    unmatched lists any pool game that couldn't be matched to a model row (only
-    meaningful when the pool mode is actually active).
+    Thin Streamlit wrapper around cbs_pickem.resolve_top12_source (shared with the
+    standalone weekly-push script, so both pick the same CBS-pool-or-full-slate source
+    with the same fallback logic): adds the spinner, ctx's cached fetcher, and the
+    "not configured at all" case up front (None status, since there's nothing to report
+    when CBS isn't set up — a status forcing a visible caption for that would be noise).
 
     See cbs_pickem.py: this is an unofficial integration built from a captured request,
     not CBS's documented API, so a fetch failure here is expected to happen sometimes.
@@ -30,26 +26,11 @@ def _resolve_top12_source(ctx):
     if not ctx.cbs_configured:
         return ctx.df, None, []
 
-    try:
-        with st.spinner("Fetching your CBS pool's games…"):
-            pool_games = ctx.get_cbs_pool_games()
-    except Exception as e:
-        return ctx.df, f"⚠️ Couldn't reach your CBS pool ({e}) — showing the full-slate Top 12 instead.", []
-
-    if not pool_games:
-        return (ctx.df, "⚠️ CBS returned no games for this pool's current period — "
-                "showing the full-slate Top 12 instead.", [])
-
-    known_team_names = set(ctx.logos.keys())
-    matched_df, unmatched = cbs_pickem.match_pool_games_to_df(pool_games, ctx.df, known_team_names)
-    if matched_df.empty:
-        return (ctx.df, "⚠️ None of your pool's games matched this slate — showing the "
-                "full-slate Top 12 instead. Try a different Year/Week above.", [])
-
-    week_number = next((g["week_number"] for g in pool_games if g.get("week_number")), None)
-    week_str = f" (Week {week_number})" if week_number else ""
-    status = f"🔒 Filtered to your {len(matched_df)}-game CBS pool{week_str}."
-    return matched_df, status, unmatched
+    with st.spinner("Fetching your CBS pool's games…"):
+        df, status, unmatched = cbs_pickem.resolve_top12_source(ctx.df, set(ctx.logos.keys()), ctx.get_cbs_pool_games)
+    if df is ctx.df and status and "None of your pool's games matched" in status:
+        status += " Try a different Year/Week above."
+    return df, status, unmatched
 
 
 def _render_slate_summary(ctx):
