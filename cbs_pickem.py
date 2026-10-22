@@ -214,6 +214,42 @@ def match_pool_games_to_df(pool_games: list[dict], df, known_team_names):
     return df[mask].copy(), unmatched
 
 
+def resolve_top12_source(df, known_team_names, fetch_pool_games):
+    """
+    Decide which DataFrame the Top 12 should be ranked from: the user's actual CBS
+    Pick'em pool (df filtered to just those games) when reachable, falling back to the
+    full slate otherwise — CBS erroring out, returning no games, or matching nothing in
+    this slate are all equally valid reasons to fall back, not failures to surface as
+    broken. Shared by the Streamlit Pick'em tab (via a cached fetch_pool_games) and the
+    standalone weekly-push script (a direct, uncached call), so both pick the same
+    source with the same fallback logic instead of two copies that could drift apart.
+
+    fetch_pool_games is a zero-arg callable returning a list of pool game dicts (already
+    run through extract_pool_games), or raising on failure. Returns (df, status,
+    unmatched): status is a short caption describing which mode is active, and unmatched
+    lists any pool game that couldn't be matched to a model row (only meaningful when
+    the pool mode is actually active).
+    """
+    try:
+        pool_games = fetch_pool_games()
+    except Exception as e:
+        return df, f"⚠️ Couldn't reach your CBS pool ({e}) — showing the full-slate Top 12 instead.", []
+
+    if not pool_games:
+        return (df, "⚠️ CBS returned no games for this pool's current period — "
+                "showing the full-slate Top 12 instead.", [])
+
+    matched_df, unmatched = match_pool_games_to_df(pool_games, df, known_team_names)
+    if matched_df.empty:
+        return (df, "⚠️ None of your pool's games matched this slate — showing the "
+                "full-slate Top 12 instead.", [])
+
+    week_number = next((g["week_number"] for g in pool_games if g.get("week_number")), None)
+    week_str = f" (Week {week_number})" if week_number else ""
+    status = f"🔒 Filtered to your {len(matched_df)}-game CBS pool{week_str}."
+    return matched_df, status, unmatched
+
+
 def _decode_jwt_payload(token: str) -> dict:
     """
     Decode a JWT's payload with NO signature verification. Safe here specifically because

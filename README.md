@@ -105,6 +105,27 @@ docstring) and may break if CBS changes their page. If it stops working, the err
 message shown in the app (or CBS's own GraphQL error text) is the best starting point
 for fixing it.
 
+### Optional: weekly Discord picks push
+
+A scheduled GitHub Action (`.github/workflows/send_weekly_picks.yml`, Tuesday mornings)
+posts the week's Top 12 ATS picks to a Discord channel — the same Top 12 the Pick'em tab
+shows (CBS-pool-filtered when that's configured, full-slate otherwise; see
+`cbs_pickem.resolve_top12_source`, shared by both). To enable it:
+
+1. In Discord: channel Settings -> Integrations -> Webhooks -> New Webhook -> copy its URL.
+2. Add it as a **repository secret** (Settings -> Secrets and variables -> Actions):
+
+```
+DISCORD_WEBHOOK_URL = "your-webhook-url"
+```
+
+Also needs `BEARER_TOKEN` as a repository secret (same CFBD token as the Streamlit app
+and the CLV workflow). If you also add `CBS_COOKIE`/`CBS_POOL_ID`/`CBS_ENTRY_ID` as
+repository secrets (see "filter picks to your actual CBS Pick'em pool" above — same
+values, just copied into Actions secrets instead of Streamlit secrets), the push uses
+those too; otherwise it posts the full-slate Top 12. You can also trigger it on demand
+from the Actions tab (`workflow_dispatch`) instead of waiting for Tuesday.
+
 Run the dashboard with:
 
 ```bash
@@ -118,6 +139,7 @@ streamlit run app.py
 - `ui_helpers.py` — pure presentation helpers (formatting, CSS, the parlay leg-pool builder) shared across `tabs/`.
 - `tabs/` — one module per dashboard tab (Pick'em, Markets & Parlays, Rankings & ATS, Model Accuracy, Stats); `tabs/today.py` renders the compact "today's games" strip above the tabs rather than a tab of its own.
 - `cbs_pickem.py` — optional CBS Pick'em pool integration (see above).
+- `discord_notify.py` — builds and sends the weekly Discord picks message (see above).
 - `cfbpredict.py` — CLI script that prints picks and saves them to CSV.
 - `backtest.py` — grades a past week's picks against actual final scores and reports accuracy/calibration by tier. Run with `python backtest.py <year> <week> [season_type]`.
 

@@ -1,0 +1,27 @@
+name: Send weekly picks to Discord
+
+# Tuesday mornings — lines are typically out and reasonably settled by then, well ahead
+# of Saturday's games. GitHub Actions cron is UTC-only (no timezone support), so this is
+# pinned to 14:30 UTC, which lands around 9:30am Central during CDT (summer) and 8:30am
+# during CST (winter) — close enough either way for a "start of game week" post.
+on:
+  schedule:
+    - cron: "30 14 * * 2"
+  workflow_dispatch: {}
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python scripts/send_discord_picks.py
+        env:
+          BEARER_TOKEN: ${{ secrets.BEARER_TOKEN }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          CBS_COOKIE: ${{ secrets.CBS_COOKIE }}
+          CBS_POOL_ID: ${{ secrets.CBS_POOL_ID }}
+          CBS_ENTRY_ID: ${{ secrets.CBS_ENTRY_ID }}

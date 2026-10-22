@@ -271,26 +271,21 @@ STYLES = """
     .today-stat-label { color: #8a909c; }
     .today-stat-value { font-weight: 600; color: #e5e7eb; }
 
-    /* Compact "what's on today" strip, pinned above the tabs next to the favorite-team
-       card — smaller and leaner than the full matchup cards on purpose: no tier badge,
-       no stat row, no repeated "ATS Pick: TeamName" text. Reuses .team-row/.team-slot
-       at a smaller scale (logos+names once), then a score row once the game is
-       underway, then a one-line time/status strip. */
+    /* "What's on today" strip, pinned above the tabs next to the favorite-team card —
+       sized the same as that card (same logo size, same card padding/radius) so the two
+       sit evenly side by side, just leaner on content: no tier badge, no stat row, no
+       repeated "ATS Pick: TeamName" text — only logos+names, the line, the score once
+       underway, and a one-line time/status strip. */
     .today-strip {
-        display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-        gap: 10px; margin-top: 8px;
+        display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+        gap: 16px; margin-top: 8px;
     }
     .today-strip-card {
-        border-radius: 12px; background: #10131c;
+        border-radius: 14px; background: #10131c;
         border: 2px solid var(--tier, rgba(255,255,255,.1));
-        padding: 12px 14px 10px; display: flex; flex-direction: column; gap: 6px;
-        box-shadow: 0 12px 24px -18px rgba(0,0,0,.8);
+        padding: 20px 22px 18px; display: flex; flex-direction: column; gap: 6px;
+        box-shadow: 0 18px 36px -22px rgba(0,0,0,.8);
     }
-    .today-strip .team-row { gap: 10px; margin: 4px 0 2px; }
-    .today-strip .team-slot { padding-top: 14px; gap: 4px; }
-    .today-strip .team-slot-name { font-size: 11px; }
-    .today-strip .pick-flag { font-size: 8px; padding: 1px 6px; }
-    .today-strip .at-sep { display: none; }
     .today-strip-line {
         text-align: center; font-family: 'Barlow Condensed', sans-serif; font-weight: 600;
         font-size: 11px; letter-spacing: .03em; color: #aab2c0;

@@ -1,8 +1,8 @@
-"""A compact strip of today's games, pinned above the tabs next to the favorite-team
-card — not a full tab of its own. Everything here still answers questions unique to
-"today": logos + names once, the line, the score once the game is underway, and
-whether the pick is actually covering right now — not a repeated "ATS Pick: TeamName"
-line or a full stat row (that's Pick'em's job)."""
+"""A strip of today's games, pinned above the tabs next to the favorite-team card and
+sized to match it — not a full tab of its own. Everything here still answers questions
+unique to "today": logos + names once, the line, the score once the game is underway,
+and whether the pick is actually covering right now — not a repeated "ATS Pick:
+TeamName" line or a full stat row (that's Pick'em's job)."""
 
 import streamlit as st
 
@@ -50,9 +50,9 @@ def render_strip(ctx):
                 result_label = {"win": "Covered", "loss": "Didn't Cover", "push": "Push"}.get(outcome)
                 time_label = f"FINAL · {result_label}" if result_label else "FINAL"
 
-        away_slot = team_slot_html(away, ctx.logo_img(away, 36, dim=pick_team == home),
+        away_slot = team_slot_html(away, ctx.logo_img(away, 56, dim=pick_team == home),
                                     is_pick=pick_team == away, tier_color=tier_color)
-        home_slot = team_slot_html(home, ctx.logo_img(home, 36, dim=pick_team == away),
+        home_slot = team_slot_html(home, ctx.logo_img(home, 56, dim=pick_team == away),
                                     is_pick=pick_team == home, tier_color=tier_color)
         cards_html += (
             f'<div class="today-strip-card" style="--tier:{tier_color};">'
