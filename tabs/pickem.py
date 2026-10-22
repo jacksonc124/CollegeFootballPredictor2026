@@ -63,26 +63,6 @@ def render(ctx):
             for g in cbs_unmatched:
                 st.caption(f"{g.get('away_team') or '?'} @ {g.get('home_team') or '?'}")
 
-    log_col, btn_col = st.columns([4, 1])
-    with log_col:
-        if pick_log.already_logged(ctx.year, ctx.api_week, ctx.season_type):
-            reason = "auto-logged (this is the current week)" if ctx.is_current_slate else "logged"
-            st.caption(f"✅ This slate's picks are {reason} for unbiased accuracy tracking — "
-                       "see the Model Accuracy tab.")
-        elif ctx.is_current_slate:
-            st.caption("📌 Auto-logging this slate now (current week) for a genuinely unbiased "
-                       "accuracy record — see the Model Accuracy tab.")
-        else:
-            st.caption("📌 This isn't the current week, so it won't auto-log — use the button to log it "
-                       "manually if you want it tracked anyway. See the Model Accuracy tab.")
-    with btn_col:
-        if not pick_log.already_logged(ctx.year, ctx.api_week, ctx.season_type):
-            if st.button("📌 Log Picks", key="log_picks_btn", use_container_width=True, type="primary"):
-                pick_log.log_picks(ctx.df, ctx.year, ctx.api_week, ctx.season_type)
-                pick_log.sync_to_supabase(ctx.supabase_url, ctx.supabase_key)
-                st.rerun()
-    st.markdown("---")
-
     df = ctx.df
     top12 = (top12_source[top12_source["tier"] != "Pass"]
              .sort_values("cover_prob", ascending=False)
@@ -144,6 +124,25 @@ def render(ctx):
             )
         cards_html += "</div>"
         st.markdown(cards_html, unsafe_allow_html=True)
+
+    log_col, btn_col = st.columns([4, 1])
+    with log_col:
+        if pick_log.already_logged(ctx.year, ctx.api_week, ctx.season_type):
+            reason = "auto-logged (this is the current week)" if ctx.is_current_slate else "logged"
+            st.caption(f"✅ This slate's picks are {reason} for unbiased accuracy tracking — "
+                       "see the Model Accuracy tab.")
+        elif ctx.is_current_slate:
+            st.caption("📌 Auto-logging this slate now (current week) for a genuinely unbiased "
+                       "accuracy record — see the Model Accuracy tab.")
+        else:
+            st.caption("📌 This isn't the current week, so it won't auto-log — use the button to log it "
+                       "manually if you want it tracked anyway. See the Model Accuracy tab.")
+    with btn_col:
+        if not pick_log.already_logged(ctx.year, ctx.api_week, ctx.season_type):
+            if st.button("📌 Log Picks", key="log_picks_btn", use_container_width=True, type="primary"):
+                pick_log.log_picks(ctx.df, ctx.year, ctx.api_week, ctx.season_type)
+                pick_log.sync_to_supabase(ctx.supabase_url, ctx.supabase_key)
+                st.rerun()
 
     st.markdown("---")
     st.markdown("## 📋 All Games")
