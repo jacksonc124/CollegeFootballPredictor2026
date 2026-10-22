@@ -111,8 +111,8 @@ def render(ctx):
             for _, leg in p["legs"].iterrows():
                 legs_html += (
                     f'<div class="parlay-leg">'
-                    f'{ctx.logo_img(leg["leg_team"], 20)}&nbsp;<b>{leg["leg_label"]}</b>'
-                    f'&nbsp;<span style="opacity:0.5">({model.rank_badge(leg["away_team"], ctx.rankings)}{leg["away_team"]} @ '
+                    f'{ctx.logo_img(leg["leg_team"], 28)}&nbsp;<b>{leg["leg_label"]}</b>'
+                    f'&nbsp;<span style="color:#8a909c">({model.rank_badge(leg["away_team"], ctx.rankings)}{leg["away_team"]} @ '
                     f'{model.rank_badge(leg["home_team"], ctx.rankings)}{leg["home_team"]})</span>'
                     f'&nbsp;&middot;&nbsp;Prob: <b style="color:#38bdf8">{leg["leg_prob"]:.1%}</b>'
                     f'&nbsp;&middot;&nbsp;{leg["leg_detail"]}'

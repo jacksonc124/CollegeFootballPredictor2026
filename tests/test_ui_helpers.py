@@ -1,7 +1,17 @@
 import pandas as pd
 import pytest
 
-from ui_helpers import build_parlay_leg_pool, format_game_date, outcome_row_css, tier_row_css
+from ui_helpers import (
+    ACCENT,
+    build_parlay_leg_pool,
+    format_game_date,
+    outcome_row_css,
+    stat_row_html,
+    team_row_html,
+    team_slot_html,
+    tier_badge_text_color,
+    tier_row_css,
+)
 
 
 def test_format_game_date_with_known_time():
@@ -79,3 +89,49 @@ def test_build_parlay_leg_pool_missing_ml_columns_still_returns_ats_legs():
     df = _parlay_df().drop(columns=["ml_pick_team", "ml_model_prob", "ml_edge"])
     pool = build_parlay_leg_pool(df, ats_tiers=("A", "B"))
     assert set(pool["leg_type"]) == {"ATS"}
+
+
+def test_tier_badge_text_color_pass_gets_light_text():
+    assert tier_badge_text_color("Pass") == "#f3f4f6"
+
+
+def test_tier_badge_text_color_other_tiers_get_dark_text():
+    assert tier_badge_text_color("A") == "#111827"
+    assert tier_badge_text_color("B") == "#111827"
+    assert tier_badge_text_color("C") == "#111827"
+
+
+def test_team_slot_html_non_pick_has_no_flag_or_pick_class():
+    html = team_slot_html("Oklahoma", "<chip/>", is_pick=False)
+    assert "is-pick" not in html
+    assert "pick-flag" not in html
+    assert "Oklahoma" in html and "<chip/>" in html
+
+
+def test_team_slot_html_pick_includes_flag_and_tier_color():
+    html = team_slot_html("New Mexico", "<chip/>", is_pick=True, tier_color="#22c55e")
+    assert 'class="team-slot is-pick"' in html
+    assert "--pick-color:#22c55e" in html
+    assert "Pick" in html
+
+
+def test_team_slot_html_pick_falls_back_to_accent_without_tier_color():
+    html = team_slot_html("New Mexico", "<chip/>", is_pick=True)
+    assert f"--pick-color:{ACCENT}" in html
+
+
+def test_team_row_html_wraps_both_slots_with_separator():
+    html = team_row_html("<away/>", "<home/>")
+    assert html == '<div class="team-row"><away/><div class="at-sep">@</div><home/></div>'
+
+
+def test_team_row_html_custom_separator():
+    html = team_row_html("<away/>", "<home/>", at_label="vs")
+    assert '>vs<' in html
+
+
+def test_stat_row_html_builds_one_tile_per_pair():
+    html = stat_row_html([("67%", "Cover Prob"), ("+22.5", "Spread")])
+    assert html.count("stat-tile") == 2
+    assert "67%" in html and "Cover Prob" in html
+    assert "+22.5" in html and "Spread" in html
