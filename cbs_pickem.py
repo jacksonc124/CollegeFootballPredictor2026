@@ -125,18 +125,57 @@ def extract_pool_games(graphql_data: dict) -> list[dict]:
     return games
 
 
+def _strip_trailing_qualifier(name: str) -> str:
+    """"Miami (Fla.)" -> "Miami" — CBS disambiguates some schools with a trailing
+    parenthetical that CFBD's plain name doesn't carry (CFBD's bare "Miami" already means
+    the Florida one; only the Ohio one gets its own qualified CFBD name)."""
+    return name.split("(")[0].strip() if "(" in name else name
+
+
+def _is_abbreviation_of(cbs_token: str, known_token: str) -> bool:
+    """Whether a CBS token (e.g. "St", "App", "W") is a plausible abbreviation of a known
+    full-name token (e.g. "State", "Appalachian", "Western") — true if it's an exact match
+    or a case-insensitive prefix of it. Covers CBS's common media-style abbreviations
+    ("Iowa St." for "Iowa State", "App. St." for "Appalachian State", "W. Kentucky" for
+    "Western Kentucky") without needing a hardcoded lookup table of every school CBS
+    might abbreviate this way."""
+    cbs_token, known_token = cbs_token.lower(), known_token.lower()
+    return cbs_token == known_token or known_token.startswith(cbs_token)
+
+
+def _tokens_abbreviate(cbs_name: str, known_name: str) -> bool:
+    """Whether every token of cbs_name is a plausible abbreviation of the corresponding
+    token of known_name, in order (same token count required) — see _is_abbreviation_of."""
+    cbs_tokens = cbs_name.replace(".", "").split()
+    known_tokens = known_name.replace(".", "").split()
+    if len(cbs_tokens) != len(known_tokens):
+        return False
+    return all(_is_abbreviation_of(c, k) for c, k in zip(cbs_tokens, known_tokens))
+
+
 def match_team_name(cbs_name: str | None, known_names) -> str | None:
     """
     Best-effort match of a CBS team name (mediumName, e.g. "South Alabama") to one of
     this app's own team names (CFBD naming, e.g. model.get_team_logos()/get_sp_ratings()
-    keys). Exact match first (the common case — CBS and CFBD both use real school names,
-    not nicknames), falling back to a close fuzzy match for minor naming differences.
+    keys). Tries, in order: an exact match (the common case); stripping a trailing
+    parenthetical qualifier CBS adds but CFBD doesn't ("Miami (Fla.)" -> "Miami"); CBS's
+    common media-style abbreviations ("Iowa St." -> "Iowa State", "App. St." ->
+    "Appalachian State"); and finally a close fuzzy match for anything else minor.
     Returns None rather than guessing when nothing is close enough to trust.
     """
     if not cbs_name:
         return None
     if cbs_name in known_names:
         return cbs_name
+
+    stripped = _strip_trailing_qualifier(cbs_name)
+    if stripped != cbs_name and stripped in known_names:
+        return stripped
+
+    for known in known_names:
+        if _tokens_abbreviate(stripped, known):
+            return known
+
     close = difflib.get_close_matches(cbs_name, known_names, n=1, cutoff=0.8)
     return close[0] if close else None
 
