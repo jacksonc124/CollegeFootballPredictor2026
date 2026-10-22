@@ -54,6 +54,31 @@ def test_match_team_name_exact_match():
     assert match_team_name("Marshall", known) == "Marshall"
 
 
+def test_match_team_name_strips_trailing_qualifier():
+    # Real mismatch seen in production: CBS writes "Miami (Fla.)", CFBD just "Miami".
+    known = ["Miami", "Miami (OH)", "Pittsburgh"]
+    assert match_team_name("Miami (Fla.)", known) == "Miami"
+
+
+def test_match_team_name_handles_cbs_state_abbreviation():
+    # Real mismatch seen in production: "Iowa St." vs CFBD's "Iowa State".
+    known = ["Iowa State", "Arizona"]
+    assert match_team_name("Iowa St.", known) == "Iowa State"
+
+
+def test_match_team_name_handles_cbs_compound_abbreviation():
+    # Real mismatch seen in production: "App. St." vs CFBD's "Appalachian State".
+    known = ["Appalachian State", "James Madison"]
+    assert match_team_name("App. St.", known) == "Appalachian State"
+
+
+def test_match_team_name_abbreviation_does_not_misfire_on_token_count_mismatch():
+    # "Ohio" (the MAC school) must never resolve to "Ohio State" just because it's a
+    # prefix match on the first word — the token-count check should block that.
+    known = ["Ohio", "Ohio State"]
+    assert match_team_name("Ohio", known) == "Ohio"
+
+
 def test_match_team_name_fuzzy_match_for_minor_differences():
     known = ["Miami", "Miami (OH)"]
     # CBS sometimes spells things slightly differently than CFBD; this should still
