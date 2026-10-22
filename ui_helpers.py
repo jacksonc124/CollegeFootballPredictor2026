@@ -70,6 +70,48 @@ def outcome_row_css(outcome: str) -> str:
     return f"background-color: {color}22" if color else ""
 
 
+def tier_badge_text_color(tier: str) -> str:
+    """Pass tier's gray (#6b7280) is too mid-toned for dark text to read well on — every
+    other tier color (green/yellow/orange) is bright enough that dark text always has
+    good contrast. Shared by the tier badge and by the 'pick' flag on a highlighted logo,
+    since both paint this same text color onto this same background color."""
+    return "#f3f4f6" if tier == "Pass" else "#111827"
+
+
+def team_slot_html(name: str, chip_html: str, is_pick: bool, tier_color: str = "") -> str:
+    """One side of a matchup's team row: a logo chip plus its name, with a '✓ Pick' flag
+    and a tier-colored glow around the chip when this is the side the model picked. The
+    chip itself (grayscale'd or not) is rendered by the caller's logo_img — this only adds
+    the label/flag chrome, so which team is 'dimmed' is decided once, by the caller, and
+    reflected consistently in both the chip's own filter and this slot's highlight."""
+    if not is_pick:
+        return f'<div class="team-slot">{chip_html}<span class="team-slot-name">{name}</span></div>'
+    color = tier_color or ACCENT
+    return (
+        f'<div class="team-slot is-pick" style="--pick-color:{color};">'
+        f'<span class="pick-flag" style="background:{color};">&#10003; Pick</span>'
+        f'{chip_html}<span class="team-slot-name">{name}</span></div>'
+    )
+
+
+def team_row_html(away_slot_html: str, home_slot_html: str, at_label: str = "@") -> str:
+    """Wraps two team_slot_html() results into one matchup row with a separator between
+    them ('@' for a true home/away game, 'vs' when the caller knows it's neutral-site)."""
+    return f'<div class="team-row">{away_slot_html}<div class="at-sep">{at_label}</div>{home_slot_html}</div>'
+
+
+def stat_row_html(tiles) -> str:
+    """The headline numbers under a matchup's team row (e.g. cover prob / spread / edge),
+    as equal-width tiles in one line. tiles is an iterable of (value, label) strings
+    already formatted by the caller (e.g. '67%', 'Cover Prob')."""
+    cells = "".join(
+        f'<div class="stat-tile"><div class="stat-num tabular">{value}</div>'
+        f'<div class="stat-label">{label}</div></div>'
+        for value, label in tiles
+    )
+    return f'<div class="stat-row">{cells}</div>'
+
+
 def build_parlay_leg_pool(df_inner: pd.DataFrame, ats_tiers=("A", "B"),
                           ml_edge_threshold: float = model.ML_EDGE_THRESHOLD) -> pd.DataFrame:
     """
@@ -116,106 +158,169 @@ def build_parlay_leg_pool(df_inner: pd.DataFrame, ats_tiers=("A", "B"),
 # ── CSS (60-30-10 color discipline — see TIER_COLORS/ACCENT above; keep literal hexes in
 # sync with those if changing, since Vega-Lite charts and pandas Styler can't read CSS
 # custom properties) ────────────────────────────────────────────────────────────────────
+#
+# Visual language: a stadium Jumbotron video-board, chosen after comparing four sports-
+# media-inspired directions (see the design pitch). Team logos are the biggest thing on
+# every matchup card, and the model's pick is never ambiguous — the picked team's logo
+# gets a tier-colored glow + a "✓ Pick" flag, while the other team fades to black-and-
+# white, the same way a broadcast graphic dims the losing side. Everything else (cover
+# prob, spread, edge) is secondary: readable, but visually quieter than the pick itself.
 STYLES = """
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;600&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Anton&family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
     html, body, [class*="css"] { font-family: 'IBM Plex Mono', monospace; }
-    h1, h2, h3 { font-family: 'Bebas Neue', sans-serif; letter-spacing: 2px; }
+    h1, h2, h3 { font-family: 'Anton', sans-serif; letter-spacing: 1px; font-weight: 400; }
+
+    /* The stadium video-board backdrop, behind every tab — committing to one dark world
+       throughout (not just on the pick cards) is what makes this read as a deliberate
+       design instead of a light app with some dark widgets glued on. */
+    .stApp {
+        background: radial-gradient(ellipse at 50% -10%, #111826 0%, #020203 55%) fixed;
+    }
 
     .stTabs [data-baseweb="tab"] {
-        font-family: 'Bebas Neue', sans-serif; font-size: 16px;
+        font-family: 'Barlow Condensed', sans-serif; font-weight: 600; font-size: 16px;
         letter-spacing: 1px; border-radius: 6px; padding: 8px 20px;
     }
 
     div.stButton > button[kind="primary"] {
         background: #38bdf8; color: #0d0f14;
-        font-family: 'Bebas Neue', sans-serif; font-size: 18px;
-        letter-spacing: 2px; border: none; border-radius: 6px;
+        font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 18px;
+        letter-spacing: 1.5px; border: none; border-radius: 6px;
         padding: 10px 32px; width: 100%; transition: background 0.2s;
     }
     div.stButton > button[kind="primary"]:hover { background: #0ea5e9; color: #fff; }
 
-    .pickem-grid {
+    /* ── Matchup cards (Pick'em Top 12, Today's Games, Moneylines) ──────────────────
+       One shared layout: rank/date + tier badge on top, a big team-vs-team logo row
+       in the middle (the pick highlighted, the other side dimmed), then a compact
+       stat row, then any secondary detail as small muted text. --tier is set inline
+       per card (a TIER_COLORS hex, or ACCENT for cards with no tier concept). */
+    .matchup-grid, .pickem-grid, .today-grid, .market-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
-        gap: 14px; margin-top: 12px;
+        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+        gap: 16px; margin-top: 14px;
     }
-    .pickem-card {
-        background: var(--background-color);
-        border: 1px solid var(--border-color);
-        border-radius: 10px; padding: 14px 16px;
-        display: flex; flex-direction: column; gap: 6px;
+    .matchup-card {
+        position: relative; border-radius: 14px;
+        background: #10131c;
+        border: 2px solid var(--tier, #6b7280);
+        box-shadow: 0 18px 36px -22px rgba(0,0,0,.8), 0 0 0 1px rgba(255,255,255,.03) inset;
+        padding: 20px 22px 18px;
+        display: flex; flex-direction: column;
     }
-    .pickem-card.tier-A { border-left: 4px solid #22c55e; }
-    .pickem-card.tier-B { border-left: 4px solid #facc15; }
-    .pickem-card.tier-C { border-left: 4px solid #fb923c; }
-    .pickem-card-top { display: flex; align-items: baseline; justify-content: space-between; }
-    .pickem-rank { font-family: 'Bebas Neue', sans-serif; font-size: 24px; line-height: 1; opacity: 0.4; }
-    .pickem-tier-badge {
-        font-family: 'Bebas Neue', sans-serif; font-size: 13px; letter-spacing: 1px;
-        padding: 2px 9px; border-radius: 4px; color: #0d0f14;
+    .matchup-card-top { display: flex; justify-content: space-between; align-items: center; }
+    .matchup-rank {
+        font-family: 'Anton', sans-serif; font-weight: 400; color: #aab2c0;
+        font-size: 13px; letter-spacing: .05em;
     }
-    .pickem-tier-badge.tier-A { background: #22c55e; }
-    .pickem-tier-badge.tier-B { background: #facc15; }
-    .pickem-tier-badge.tier-C { background: #fb923c; }
-    /* The Pick'em tab never shows Pass-tier cards (filtered out upstream), but the Today
-       tab shows every game including Pass, so this badge needs its own readable style. */
-    .pickem-tier-badge.tier-Pass { background: #6b7280; color: #f3f4f6; }
-    .pickem-matchup { font-size: 13px; opacity: 0.65; }
-    /* The hero number — this is this app's "score," so it gets the boldest, biggest
-       treatment on the card, matching how scores/timers read in a sports app. */
-    .pickem-hero { display: flex; align-items: baseline; gap: 10px; margin: 2px 0; }
-    .pickem-cover-prob {
-        font-family: 'Bebas Neue', sans-serif; font-size: 40px; line-height: 1;
+    .tier-badge {
+        font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 12px;
+        letter-spacing: .07em; padding: 3px 11px; border-radius: 4px;
+        background: var(--tier, #6b7280); color: var(--tier-text, #111827);
     }
-    .pickem-pick { font-size: 13px; opacity: 0.85; }
-    .pickem-pick b { font-size: 14px; }
-    .pickem-confidence-bar {
-        background: rgba(128,128,128,0.15); border-radius: 3px; height: 5px; width: 100%;
-        margin: 2px 0 4px;
+
+    /* Team row: the headline of every matchup card. Logos are large and centered;
+       whichever side the model picked gets a glow ring + flag (color set via
+       --pick-color), the other side is grayscale'd by logo_img(dim=True) so the two
+       signals (highlight vs. black-and-white) always travel together. */
+    .team-row { display: flex; align-items: flex-start; justify-content: center; gap: 16px; margin: 18px 0 16px; }
+    .team-slot { display: flex; flex-direction: column; align-items: center; gap: 8px; flex: 1; min-width: 0; position: relative; padding-top: 20px; }
+    .team-slot-name {
+        font-family: 'Barlow Condensed', sans-serif; font-weight: 600; font-size: 14px;
+        color: #8a909c; text-align: center; line-height: 1.25;
     }
-    .pickem-confidence-fill { border-radius: 3px; height: 5px; }
-    .pickem-meta { font-size: 11px; opacity: 0.55; line-height: 1.6; }
-    .pickem-logos { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-    .pickem-vs { font-size: 11px; opacity: 0.4; }
+    .team-slot.is-pick .team-slot-name { color: #fff; font-weight: 700; }
+    .team-slot.is-pick .logo-chip {
+        box-shadow: 0 0 0 4px var(--pick-color, #22c55e), 0 0 20px -3px var(--pick-color, #22c55e);
+    }
+    .at-sep { font-family: 'Anton', sans-serif; font-weight: 400; font-size: 13px; color: #4d5560; flex: 0 0 auto; align-self: center; margin-top: 32px; }
+    .pick-flag {
+        position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+        font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 10px; letter-spacing: .07em;
+        color: #111827; padding: 2px 9px; border-radius: 20px; white-space: nowrap;
+    }
+
+    /* Headline stat row — cover prob / spread / edge and similar. Demoted from a giant
+       hero number (the old design) to a clean row of equal tiles, since the picked
+       team's logo is now what answers "who do I pick"; this row only needs to answer
+       "how confident, and what's the number." */
+    .stat-row {
+        display: grid; grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
+        border-top: 1px solid rgba(255,255,255,.1); padding-top: 13px; margin-top: 2px;
+    }
+    .stat-tile { text-align: center; padding: 0 4px; border-left: 1px solid rgba(255,255,255,.08); }
+    .stat-tile:first-child { border-left: none; }
+    .stat-num { font-family: 'Anton', sans-serif; font-weight: 400; font-size: 20px; color: #fff; line-height: 1; }
+    .stat-label { font-family: 'Barlow Condensed', sans-serif; font-size: 10px; letter-spacing: .07em; text-transform: uppercase; color: #8a909c; margin-top: 4px; }
+
+    /* Secondary details below the stat row (site/date/notes, line-shopping, live score,
+       moneyline/O-U specifics) — present, but visually quieter than the pick and the
+       headline stats above it. */
+    .extra-meta { font-size: 11px; color: #8a909c; line-height: 1.8; margin-top: 10px; }
+    .extra-meta b { color: #e5e7eb; font-weight: 600; }
+    .today-stats {
+        display: grid; grid-template-columns: repeat(2, 1fr);
+        gap: 0 12px; margin-top: 10px; font-size: 12px;
+    }
+    .today-stats > div {
+        display: flex; justify-content: space-between;
+        border-bottom: 1px solid rgba(255,255,255,.08); padding: 4px 0;
+    }
+    .today-stat-label { color: #8a909c; }
+    .today-stat-value { font-weight: 600; color: #e5e7eb; }
+    .today-live {
+        font-size: 12px; font-weight: 600; margin-top: 2px; padding: 3px 8px;
+        border-radius: 4px; display: inline-block;
+    }
+    .today-live.status-live { background: #ef444422; color: #ef4444; }
+    .today-live.status-final-win { background: #22c55e22; color: #22c55e; }
+    .today-live.status-final-loss { background: #ef444422; color: #ef4444; }
+    .today-live.status-final-push { background: rgba(128,128,128,0.15); color: #9ca3af; }
+    .total-pick-line {
+        font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 16px;
+        color: #fff; text-align: center; margin-top: 4px;
+    }
+    .total-pick-line b { color: #38bdf8; }
+    .neutral-badge { font-size: 11px; color: #8a909c; text-align: center; margin-top: -4px; }
 
     .parlay-card {
-        background: var(--background-color);
+        background: #10131c;
         border: 1px solid #38bdf844;
-        border-radius: 10px; padding: 16px 20px; margin-bottom: 14px;
+        border-radius: 14px; padding: 18px 20px; margin-bottom: 14px;
+        box-shadow: 0 18px 36px -22px rgba(0,0,0,.8);
     }
     .parlay-title {
-        font-family: 'Bebas Neue', sans-serif; font-size: 22px;
+        font-family: 'Anton', sans-serif; font-weight: 400; font-size: 22px;
         color: #38bdf8; letter-spacing: 1px; margin-bottom: 8px;
     }
-    .parlay-leg { font-size: 13px; padding: 4px 0; border-bottom: 1px solid rgba(128,128,128,0.15); }
+    .parlay-leg { font-size: 13px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,.08); display: flex; align-items: center; }
     .parlay-leg:last-child { border-bottom: none; }
-    .parlay-prob { font-family: 'Bebas Neue', sans-serif; font-size: 18px; color: #38bdf8; margin-top: 10px; }
+    .parlay-prob { font-family: 'Anton', sans-serif; font-weight: 400; font-size: 18px; color: #38bdf8; margin-top: 10px; }
 
-    .leg-display { font-family: 'Bebas Neue', sans-serif; font-size: 52px; color: #38bdf8; line-height: 1; text-align: center; }
-    .leg-label { font-size: 11px; opacity: 0.5; letter-spacing: 1px; text-align: center; margin-top: 2px; }
+    .leg-display { font-family: 'Anton', sans-serif; font-weight: 400; font-size: 52px; color: #38bdf8; line-height: 1; text-align: center; }
+    .leg-label { font-family: 'Barlow Condensed', sans-serif; font-size: 11px; color: #8a909c; letter-spacing: 1px; text-align: center; margin-top: 2px; }
 
+    /* Rankings/futures list — a single team per card (no "pick" to highlight, no versus),
+       so the logo is simply large and centered, same fonts/colors as everywhere else. */
     .futures-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-        gap: 12px; margin-top: 12px;
+        grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+        gap: 14px; margin-top: 12px;
     }
     .futures-card {
-        background: var(--background-color);
-        border: 1px solid var(--border-color);
-        border-radius: 10px; padding: 16px;
-        display: flex; flex-direction: column; gap: 6px;
+        background: #10131c;
+        border: 2px solid var(--tier, rgba(255,255,255,.1));
+        border-radius: 14px; padding: 18px;
+        display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center;
+        box-shadow: 0 18px 36px -22px rgba(0,0,0,.8);
     }
-    .futures-card.rank-1 { border-left: 4px solid #f59e0b; }
-    .futures-card.rank-2 { border-left: 4px solid #94a3b8; }
-    .futures-card.rank-3 { border-left: 4px solid #b45309; }
-    .futures-card.rank-other { border-left: 4px solid rgba(128,128,128,0.2); }
-    .futures-rank { font-family: 'Bebas Neue', sans-serif; font-size: 26px; line-height: 1; opacity: 0.4; }
-    .futures-name { font-family: 'Bebas Neue', sans-serif; font-size: 20px; letter-spacing: 1px; }
-    .futures-score { font-family: 'Bebas Neue', sans-serif; font-size: 22px; color: #38bdf8; }
-    .futures-label { font-size: 11px; opacity: 0.5; }
-    .bar-bg { margin-top: 6px; background: rgba(128,128,128,0.15); border-radius: 4px; height: 4px; width: 100%; }
+    .futures-rank { font-family: 'Anton', sans-serif; font-weight: 400; font-size: 26px; line-height: 1; color: #aab2c0; }
+    .futures-name { font-family: 'Barlow Condensed', sans-serif; font-weight: 600; font-size: 17px; margin-top: 4px; }
+    .futures-score { font-family: 'Anton', sans-serif; font-weight: 400; font-size: 24px; color: #38bdf8; margin-top: 2px; }
+    .futures-label { font-size: 11px; color: #8a909c; }
+    .bar-bg { margin-top: 6px; background: rgba(255,255,255,.1); border-radius: 4px; height: 4px; width: 100%; }
     .bar-fill { border-radius: 4px; height: 4px; }
 
     /* Slate confidence breakdown — a single proportional bar (segment width = share of
@@ -224,79 +329,28 @@ STYLES = """
     .tier-bar { display: flex; height: 16px; border-radius: 8px; overflow: hidden; margin-top: 6px; }
     .tier-bar-seg { height: 100%; transition: flex-grow 0.2s; }
     .tier-bar-legend {
-        font-size: 13px; opacity: 0.8; margin-top: 10px;
+        font-size: 13px; color: #c3c9cf; margin-top: 10px;
         display: flex; gap: 18px; flex-wrap: wrap;
     }
-    .tier-bar-legend b { font-family: 'Bebas Neue', sans-serif; letter-spacing: 0.5px; }
-
-    .today-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
-        gap: 14px; margin-top: 12px;
-    }
-    .today-card {
-        background: var(--background-color);
-        border: 1px solid var(--border-color);
-        border-radius: 10px; padding: 14px 16px;
-        display: flex; flex-direction: column; gap: 6px;
-    }
-    .today-card.tier-A { border-left: 4px solid #22c55e; }
-    .today-card.tier-B { border-left: 4px solid #facc15; }
-    .today-card.tier-C { border-left: 4px solid #fb923c; }
-    .today-card-top { display: flex; align-items: baseline; justify-content: space-between; }
-    .today-kickoff { font-size: 12px; opacity: 0.6; }
-    .today-live {
-        font-size: 12px; font-weight: 600; margin-top: 4px; padding: 3px 8px;
-        border-radius: 4px; display: inline-block;
-    }
-    .today-live.status-live { background: #ef444422; color: #ef4444; }
-    .today-live.status-final-win { background: #22c55e22; color: #22c55e; }
-    .today-live.status-final-loss { background: #ef444422; color: #ef4444; }
-    .today-live.status-final-push { background: rgba(128,128,128,0.15); color: #6b7280; }
-    .today-stats {
-        display: grid; grid-template-columns: repeat(2, 1fr);
-        gap: 0 12px; margin-top: 8px; font-size: 12px;
-    }
-    .today-stats > div {
-        display: flex; justify-content: space-between;
-        border-bottom: 1px solid rgba(128,128,128,0.12); padding: 4px 0;
-    }
-    .today-stat-label { opacity: 0.6; }
-    .today-stat-value { font-weight: 600; }
-
-    /* Moneyline / O-U cards — same shape as Pick'em/Today cards, but these picks have no
-       tier (no A/B/C confidence bucket), so the hero number is plain ACCENT rather than a
-       tier color, and there's no colored border-left. */
-    .market-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
-        gap: 14px; margin-top: 12px;
-    }
-    .market-card {
-        background: var(--background-color);
-        border: 1px solid var(--border-color);
-        border-radius: 10px; padding: 14px 16px;
-        display: flex; flex-direction: column; gap: 6px;
-    }
-    .market-hero { font-family: 'Bebas Neue', sans-serif; font-size: 36px; color: #38bdf8; line-height: 1; margin-top: 2px; }
-    .market-hero-label { font-size: 11px; opacity: 0.55; letter-spacing: 0.5px; }
-    .market-pick { font-size: 13px; opacity: 0.85; margin-top: 2px; }
-    .market-pick b { font-size: 14px; }
-    .neutral-badge { font-size: 11px; opacity: 0.7; margin-top: -2px; }
+    .tier-bar-legend b { font-family: 'Barlow Condensed', sans-serif; font-weight: 700; letter-spacing: 0.5px; }
 
     /* Light chip behind every team logo so dark/transparent PNG artwork stays visible
-       regardless of the app's light/dark theme. The colored ring (set inline per-logo,
+       regardless of the card's dark background. The colored ring (set inline per-logo,
        since it's each team's own brand color) adds a subtle bit of team identity without
-       touching text contrast — decorative only, never load-bearing for readability. */
+       touching text contrast — decorative only, never load-bearing for readability.
+       logo-chip-dim is the "this team isn't the pick" signal: grayscale + a touch of
+       faded opacity, same idea as a broadcast graphic dimming the losing side. */
     .logo-chip {
         display: inline-flex; align-items: center; justify-content: center;
         background: rgba(255,255,255,0.94);
         border: 2px solid rgba(0,0,0,0.08);
         border-radius: 50%;
         flex-shrink: 0;
+        transition: filter .15s, box-shadow .15s;
     }
+    .logo-chip-dim { filter: grayscale(1); opacity: .75; }
 
-    .fetch-caption { font-size: 12px; opacity: 0.6; margin-top: 4px; }
+    .fetch-caption { font-size: 12px; color: #8a909c; margin-top: 4px; }
 
     /* Streamlit stacks st.columns() vertically below ~640px by default, which turns the
        −/legs/+ stepper into three separate full-width rows on mobile. Force just this row
@@ -308,6 +362,11 @@ STYLES = """
         width: auto !important;
         flex: 1 1 0 !important;
         min-width: 0 !important;
+    }
+
+    @media (max-width: 460px) {
+        .team-slot-name { font-size: 12px; }
+        .stat-num { font-size: 17px; }
     }
 </style>
 """

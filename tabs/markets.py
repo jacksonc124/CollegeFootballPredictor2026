@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 import model
+from ui_helpers import ACCENT, stat_row_html, team_row_html, team_slot_html
 
 
 def render(ctx):
@@ -49,15 +50,26 @@ def render(ctx):
                         f'<div><span class="today-stat-label">🛒 Best ML</span>'
                         f'<span class="today-stat-value">{best_ml:+.0f} @ {row["best_ml_provider"]}</span></div>'
                     )
+            away_slot = team_slot_html(
+                f"{ctx.fav_star(away)}{model.rank_badge(away, ctx.rankings)}{away}",
+                ctx.logo_img(away, 56, dim=pick_team == home),
+                is_pick=pick_team == away, tier_color=ACCENT,
+            )
+            home_slot = team_slot_html(
+                f"{ctx.fav_star(home)}{model.rank_badge(home, ctx.rankings)}{home}",
+                ctx.logo_img(home, 56, dim=pick_team == away),
+                is_pick=pick_team == home, tier_color=ACCENT,
+            )
+            ml_stat_row = stat_row_html([
+                (f"{row['ml_model_prob']:.0%}", "Win Prob"),
+                (f"{row['ml_market_prob']:.1%}", "Market Prob"),
+                (f"{row['ml_edge']:+.1%}", "Edge"),
+            ])
             ml_cards_html += (
-                f'<div class="market-card">'
-                f'<div class="pickem-logos">{ctx.logo_img(away, 28)}<span class="pickem-vs">@</span>{ctx.logo_img(home, 28)}</div>'
-                f'<div class="pickem-matchup">{ctx.fav_star(away)}{model.rank_badge(away, ctx.rankings)}{away} @ '
-                f'{ctx.fav_star(home)}{model.rank_badge(home, ctx.rankings)}{home}</div>'
+                f'<div class="matchup-card" style="--tier:{ACCENT};--tier-text:#111827;">'
+                f'{team_row_html(away_slot, home_slot)}'
                 f'{neutral_html}'
-                f'<div class="market-hero">{row["ml_model_prob"]:.0%}</div>'
-                f'<div class="market-hero-label">MODEL WIN PROB</div>'
-                f'<div class="market-pick">&#10003; ML Pick: <b>{model.rank_badge(pick_team, ctx.rankings)}{pick_team}</b></div>'
+                f'{ml_stat_row}'
                 f'<div class="today-stats">{ml_stats_html}</div>'
                 f'</div>'
             )
@@ -83,7 +95,6 @@ def render(ctx):
             stats_html = (
                 f'<div><span class="today-stat-label">Market O/U</span><span class="today-stat-value">{row["market_total"]:.1f}</span></div>'
                 f'<div><span class="today-stat-label">Predicted</span><span class="today-stat-value">{row["predicted_total"]:.1f}</span></div>'
-                f'<div><span class="today-stat-label">Edge (pts)</span><span class="today-stat-value">{row["total_edge"]:+.1f}</span></div>'
             )
             if has_opp_adj and pd.notna(row.get("opponent_adjustment")):
                 stats_html += (f'<div><span class="today-stat-label">Opp Adj</span>'
@@ -92,17 +103,27 @@ def render(ctx):
                 stats_html += (f'<div><span class="today-stat-label">Weather Adj</span>'
                                 f'<span class="today-stat-value">{row["weather_adjustment"]:+.1f}</span></div>')
 
+            # Over/Under has no "team to pick" — it's a total, not a side — so neither
+            # logo is highlighted or dimmed; the pick is the Over/Under line itself,
+            # called out below the team row instead of on a logo.
+            away_slot = team_slot_html(
+                f"{ctx.fav_star(away)}{model.rank_badge(away, ctx.rankings)}{away}",
+                ctx.logo_img(away, 56), is_pick=False,
+            )
+            home_slot = team_slot_html(
+                f"{ctx.fav_star(home)}{model.rank_badge(home, ctx.rankings)}{home}",
+                ctx.logo_img(home, 56), is_pick=False,
+            )
+            total_stat_row = stat_row_html([
+                (f"{cover:.0%}", "Cover Prob"),
+                (f"{row['total_edge']:+.1f}", "Edge (pts)"),
+            ])
             total_cards_html += (
-                f'<div class="market-card">'
-                f'<div class="pickem-logos">{ctx.logo_img(away, 28)}<span class="pickem-vs">@</span>{ctx.logo_img(home, 28)}</div>'
-                f'<div class="pickem-matchup">{ctx.fav_star(away)}{model.rank_badge(away, ctx.rankings)}{away} @ '
-                f'{ctx.fav_star(home)}{model.rank_badge(home, ctx.rankings)}{home}</div>'
+                f'<div class="matchup-card" style="--tier:{ACCENT};--tier-text:#111827;">'
+                f'{team_row_html(away_slot, home_slot)}'
                 f'{neutral_html}'
-                f'<div class="pickem-hero"><span class="pickem-cover-prob" style="color:#38bdf8;">{cover:.0%}</span></div>'
-                f'<div class="pickem-confidence-bar">'
-                f'<div class="pickem-confidence-fill" style="width:{cover * 100:.0f}%;background:#38bdf8;"></div>'
-                f'</div>'
-                f'<div class="market-pick">&#10003; Total Pick: <b>{row["total_pick"]}</b></div>'
+                f'<div class="total-pick-line">Pick: <b>{row["total_pick"]}</b></div>'
+                f'{total_stat_row}'
                 f'<div class="today-stats">{stats_html}</div>'
                 f'</div>'
             )

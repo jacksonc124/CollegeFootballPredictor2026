@@ -24,17 +24,18 @@ def render(ctx):
         sp_max = display_champ["SP+ Rating"].max()
         sp_min = display_champ["SP+ Rating"].min()
 
+        rank_border = {1: "#f59e0b", 2: "#94a3b8", 3: "#b45309"}
         cards_html = '<div class="futures-grid">'
         for i, row in display_champ.iterrows():
             rank       = i + 1
             team       = row["Team"]
             rating     = row["SP+ Rating"]
-            rank_class = {1: "rank-1", 2: "rank-2", 3: "rank-3"}.get(rank, "rank-other")
+            border     = rank_border.get(rank, "rgba(255,255,255,.1)")
             medal      = {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"#{rank}")
-            logo_tag   = ctx.logo_img(team, 40)
+            logo_tag   = ctx.logo_img(team, 56)
             bar_pct    = int((rating - sp_min) / (sp_max - sp_min + 0.001) * 100) if sp_max != sp_min else 80
             cards_html += (
-                f'<div class="futures-card {rank_class}">'
+                f'<div class="futures-card" style="--tier:{border};">'
                 f'<div class="futures-rank">{medal}</div>'
                 f'{logo_tag}'
                 f'<div class="futures-name">{model.rank_badge(team, ctx.rankings)}{team}</div>'

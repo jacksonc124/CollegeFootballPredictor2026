@@ -1,0 +1,12 @@
+# Pins the app to the dark "Jumbotron" look for every viewer, regardless of their
+# system theme preference — the custom card CSS in ui_helpers.py is built for this
+# palette (card backgrounds, borders, native widgets all read var(--background-color)/
+# var(--border-color), which Streamlit derives from this theme), so letting a viewer's
+# light-mode OS setting override it would mismatch native widgets against the dark cards.
+[theme]
+base = "dark"
+primaryColor = "#38bdf8"
+backgroundColor = "#07090b"
+secondaryBackgroundColor = "#10131c"
+textColor = "#e7ece9"
+font = "monospace"

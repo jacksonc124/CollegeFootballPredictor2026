@@ -5,7 +5,10 @@ import streamlit as st
 
 import backtest
 import model
-from ui_helpers import ACCENT, OUTCOME_COLORS, TIER_COLORS
+from ui_helpers import (
+    ACCENT, OUTCOME_COLORS, TIER_COLORS, stat_row_html, team_row_html,
+    team_slot_html, tier_badge_text_color,
+)
 
 
 def render(ctx):
@@ -30,11 +33,7 @@ def render(ctx):
         spread            = row["market_spread_home"]
         tier_color        = TIER_COLORS.get(tier, ACCENT)
 
-        stats_html = (
-            f'<div><span class="today-stat-label">Spread</span>'
-            f'<span class="today-stat-value">{spread:+.1f}</span></div>'
-            if spread is not None else ""
-        )
+        stats_html = ""
         if has_ml and pd.notna(row.get("home_moneyline")):
             stats_html += (
                 f'<div><span class="today-stat-label">Home ML</span>'
@@ -89,23 +88,28 @@ def render(ctx):
                 live_html = (f'<div class="today-live {css_class}">🏁 FINAL {away} {ap} — '
                              f'{home} {hp} · {label}</div>')
 
+        tier_text = tier_badge_text_color(tier)
+        away_slot = team_slot_html(
+            f"{ctx.fav_star(away)}{model.rank_badge(away, ctx.rankings)}{away}",
+            ctx.logo_img(away, 56, dim=pick_team == home),
+            is_pick=pick_team == away, tier_color=tier_color,
+        )
+        home_slot = team_slot_html(
+            f"{ctx.fav_star(home)}{model.rank_badge(home, ctx.rankings)}{home}",
+            ctx.logo_img(home, 56, dim=pick_team == away),
+            is_pick=pick_team == home, tier_color=tier_color,
+        )
+        spread_tile_val = f"{spread:+.1f}" if spread is not None else "—"
         today_cards_html += (
-            f'<div class="today-card tier-{tier}">'
-            f'<div class="today-card-top">'
-            f'<div class="today-kickoff">🗓 {row["start_date"]}</div>'
-            f'<div class="pickem-tier-badge tier-{tier}">TIER {tier}</div>'
+            f'<div class="matchup-card" style="--tier:{tier_color};--tier-text:{tier_text};">'
+            f'<div class="matchup-card-top">'
+            f'<div class="matchup-rank">🗓 {row["start_date"]}</div>'
+            f'<div class="tier-badge">TIER {tier}</div>'
             f'</div>'
-            f'<div class="pickem-logos">{ctx.logo_img(away, 32)}<span class="pickem-vs">@</span>{ctx.logo_img(home, 32)}</div>'
-            f'<div class="pickem-matchup">{ctx.fav_star(away)}{model.rank_badge(away, ctx.rankings)}{away} @ '
-            f'{ctx.fav_star(home)}{model.rank_badge(home, ctx.rankings)}{home}</div>'
+            f'{team_row_html(away_slot, home_slot)}'
             f'{live_html}'
-            f'<div class="pickem-hero">'
-            f'<span class="pickem-cover-prob" style="color:{tier_color};">{cover:.0%}</span>'
-            f'</div>'
-            f'<div class="pickem-confidence-bar">'
-            f'<div class="pickem-confidence-fill" style="width:{cover * 100:.0f}%;background:{tier_color};"></div>'
-            f'</div>'
-            f'<div class="pickem-pick">&#10003; ATS Pick: <b>{model.rank_badge(pick_team, ctx.rankings)}{pick_team}</b></div>'
+            f'{stat_row_html([(f"{cover:.0%}", "Cover Prob"), (spread_tile_val, "Spread")])}'
+            f'<div class="extra-meta">&#10003; ATS Pick: <b>{model.rank_badge(pick_team, ctx.rankings)}{pick_team}</b></div>'
             f'<div class="today-stats">{stats_html}</div>'
             f'</div>'
         )

@@ -9,7 +9,10 @@ import model
 import pick_log
 import ui_helpers
 from tabs import accuracy, markets, parlays, pickem, rankings, stats, today
-from ui_helpers import ACCENT, CENTRAL, TIER_COLORS, format_game_date
+from ui_helpers import (
+    ACCENT, CENTRAL, TIER_COLORS, format_game_date, stat_row_html,
+    team_row_html, team_slot_html, tier_badge_text_color,
+)
 
 # ── page config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="CFB Gambling Model", page_icon="🏈", layout="wide")
@@ -431,7 +434,7 @@ st.markdown("---")
 
 
 # ── Logo helper ───────────────────────────────────────────────────────────────
-def logo_img(team, size=32):
+def logo_img(team, size=32, dim=False):
     """
     Render a team logo (or initials fallback) inside a light circular chip, ringed
     with the team's real brand color when known. The chip guarantees contrast
@@ -439,18 +442,23 @@ def logo_img(team, size=32):
     some logos are otherwise invisible on a dark background. The color ring is purely
     decorative team identity (dynamic branding) — it never carries meaning on its own,
     so a missing color just falls back to the neutral border, not a broken chip.
+
+    dim=True grayscales the chip (see .logo-chip-dim) — used on whichever side of a
+    matchup card ISN'T the model's pick, so "not this team" reads at a glance even
+    before noticing the other side's colored glow ring (see ui_helpers.team_slot_html).
     """
     url = logos.get(team, "")
     if url:
         inner = f'<img src="{url}" width="{size}" height="{size}" style="object-fit:contain;" />'
     else:
         initials = "".join(w[0] for w in team.split()[:2]).upper()
-        inner = f'<span style="font-family:\'Bebas Neue\',sans-serif;font-size:{size // 2}px;color:#0d0f14;">{initials}</span>'
+        inner = f'<span style="font-family:\'Anton\',sans-serif;font-size:{size // 2}px;color:#0d0f14;">{initials}</span>'
     pad = max(2, size // 8)
     chip_size = size + pad * 2
     ring_color = team_colors.get(team, "")
     border = f'border: 2px solid {ring_color};' if ring_color else ""
-    return f'<span class="logo-chip" style="width:{chip_size}px;height:{chip_size}px;{border}">{inner}</span>'
+    dim_class = " logo-chip-dim" if dim else ""
+    return f'<span class="logo-chip{dim_class}" style="width:{chip_size}px;height:{chip_size}px;{border}">{inner}</span>'
 
 
 def fav_star(team: str) -> str:
@@ -473,6 +481,12 @@ if favorite_team:
         venue                  = row.get("venue") or ""
         game_date              = row.get("start_date") or ""
         tier_color             = TIER_COLORS.get(tier, ACCENT)
+        tier_text              = tier_badge_text_color(tier)
+        # This card is framed in the fan's own team's brand color (not the tier color)
+        # since it's "your team", not primarily a pick — the pick itself still shows via
+        # the tier-colored glow on whichever logo the model actually picked, so the two
+        # meanings (team identity vs. pick confidence) stay visually distinct.
+        fav_color              = team_colors.get(favorite_team) or tier_color
         if neutral_site is None:
             site_str = ""
         elif neutral_site:
@@ -480,27 +494,30 @@ if favorite_team:
         else:
             site_str = f"🏠 {venue}" if venue else "🏠 Home Game"
 
+        # Dim only the side that's neither the favorite nor the model's pick — your own
+        # team never goes black-and-white on its own card, even on weeks the model likes
+        # the other side.
+        away_slot = team_slot_html(
+            f"{model.rank_badge(away, rankings_data)}{away}",
+            logo_img(away, 56, dim=pick_team != away and away != favorite_team),
+            is_pick=pick_team == away, tier_color=tier_color,
+        )
+        home_slot = team_slot_html(
+            f"{model.rank_badge(home, rankings_data)}{home}",
+            logo_img(home, 56, dim=pick_team != home and home != favorite_team),
+            is_pick=pick_team == home, tier_color=tier_color,
+        )
+        meta_lines = [l for l in [site_str, f"🗓 {game_date}" if game_date else ""] if l]
         st.markdown(
-            f'<div class="pickem-card tier-{tier}" style="max-width:420px;">'
-            f'<div class="pickem-card-top">'
-            f'<div class="pickem-rank">⭐ Your Team</div>'
-            f'<div class="pickem-tier-badge tier-{tier}">TIER {tier}</div>'
+            f'<div class="matchup-card" style="--tier:{fav_color};max-width:420px;">'
+            f'<div class="matchup-card-top">'
+            f'<div class="matchup-rank">⭐ Your Team</div>'
+            f'<div class="tier-badge" style="--tier:{tier_color};--tier-text:{tier_text};">TIER {tier}</div>'
             f'</div>'
-            f'<div class="pickem-logos">{logo_img(away, 32)}<span class="pickem-vs">@</span>{logo_img(home, 32)}</div>'
-            f'<div class="pickem-matchup">{fav_star(away)}{model.rank_badge(away, rankings_data)}{away} @ '
-            f'{fav_star(home)}{model.rank_badge(home, rankings_data)}{home}</div>'
-            f'<div class="pickem-hero">'
-            f'<span class="pickem-cover-prob" style="color:{tier_color};">{cover:.0%}</span>'
-            f'</div>'
-            f'<div class="pickem-confidence-bar">'
-            f'<div class="pickem-confidence-fill" style="width:{cover * 100:.0f}%;background:{tier_color};"></div>'
-            f'</div>'
-            f'<div class="pickem-pick">&#10003; Pick: <b>{model.rank_badge(pick_team, rankings_data)}{pick_team}</b></div>'
-            f'<div class="pickem-meta">'
-            f'Edge: <b>{edge:+.1f} pts</b> &nbsp;|&nbsp; Spread: {spread:+.1f}'
-            f'{"<br/>" + site_str if site_str else ""}'
-            f'{"<br/>🗓 " + game_date if game_date else ""}'
-            f'</div></div>',
+            f'{team_row_html(away_slot, home_slot)}'
+            f'{stat_row_html([(f"{cover:.0%}", "Cover Prob"), (f"{spread:+.1f}", "Spread"), (f"{edge:+.1f}", "Edge")])}'
+            f'<div class="extra-meta">{"<br/>".join(meta_lines)}</div>'
+            f'</div>',
             unsafe_allow_html=True,
         )
     st.markdown("---")
