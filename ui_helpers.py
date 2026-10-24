@@ -275,12 +275,21 @@ STYLES = """
        sized the same as that card (same logo size, same card padding/radius) so the two
        sit evenly side by side, just leaner on content: no tier badge, no stat row, no
        repeated "ATS Pick: TeamName" text — only logos+names, the line, the score once
-       underway, and a one-line time/status strip. */
+       underway, and a one-line time/status strip.
+
+       A horizontally-scrolling row, not a wrapping grid — on a big Saturday slate
+       (40-60+ games) a wrapping grid turns into dozens of vertically-stacked rows,
+       which on a phone means scrolling through the whole day's games just to reach the
+       tabs below. Swiping sideways through a fixed-height strip keeps this area a
+       constant, small size regardless of how many games are on, same idea as a
+       "stories" row — you only scroll through it if you actually want to look. */
     .today-strip {
-        display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-        gap: 16px; margin-top: 8px;
+        display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 16px;
+        margin-top: 8px; padding-bottom: 8px;
+        scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch;
     }
     .today-strip-card {
+        flex: 0 0 240px; scroll-snap-align: start;
         border-radius: 14px; background: #10131c;
         border: 2px solid var(--tier, rgba(255,255,255,.1));
         padding: 20px 22px 18px; display: flex; flex-direction: column; gap: 6px;

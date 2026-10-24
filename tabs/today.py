@@ -16,6 +16,8 @@ def render_strip(ctx):
 
     scoreboard = ctx.get_scoreboard(tuple(ctx.logos.keys()))
     st.markdown(f"##### 📅 Today — {ctx.today.strftime('%A, %B %d')}")
+    if len(ctx.today_df) > 1:
+        st.caption("↔ Swipe for more games")
 
     cards_html = '<div class="today-strip">'
     for _, row in ctx.today_df.iterrows():
