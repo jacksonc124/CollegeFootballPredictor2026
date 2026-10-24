@@ -5,13 +5,16 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 import pytest
 
+import pick_log
 from cbs_pickem import (
     cookie_expiry,
     cookie_expiry_warning,
     extract_pool_games,
+    load_cookie_from_supabase,
     match_pool_games_to_df,
     match_team_name,
     resolve_top12_source,
+    save_cookie_to_supabase,
 )
 
 
@@ -228,3 +231,29 @@ def test_cookie_expiry_warning_already_expired():
 
 def test_cookie_expiry_warning_none_when_expiry_unknown():
     assert cookie_expiry_warning("userId=abc123") is None
+
+
+def test_load_cookie_from_supabase_noop_without_credentials(monkeypatch):
+    def fail_if_called(*a, **k):
+        raise AssertionError("should not call Supabase without credentials")
+    monkeypatch.setattr(pick_log, "get_synced_file", fail_if_called)
+    assert load_cookie_from_supabase("", "") is None
+
+
+def test_load_cookie_from_supabase_returns_saved_cookie(monkeypatch):
+    monkeypatch.setattr(pick_log, "get_synced_file", lambda path, url, key: "auth_state=fresh")
+    assert load_cookie_from_supabase("https://x.supabase.co", "key") == "auth_state=fresh"
+
+
+def test_load_cookie_from_supabase_swallows_failures(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("network error")
+    monkeypatch.setattr(pick_log, "get_synced_file", boom)
+    assert load_cookie_from_supabase("https://x.supabase.co", "key") is None
+
+
+def test_save_cookie_to_supabase_calls_put_synced_file(monkeypatch):
+    calls = []
+    monkeypatch.setattr(pick_log, "put_synced_file", lambda path, content, url, key: calls.append((path, content)))
+    save_cookie_to_supabase("auth_state=new-cookie", "https://x.supabase.co", "key")
+    assert calls == [("cbs_cookie.txt", "auth_state=new-cookie")]

@@ -22,6 +22,8 @@ jobs:
         env:
           BEARER_TOKEN: ${{ secrets.BEARER_TOKEN }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           CBS_COOKIE: ${{ secrets.CBS_COOKIE }}
           CBS_POOL_ID: ${{ secrets.CBS_POOL_ID }}
           CBS_ENTRY_ID: ${{ secrets.CBS_ENTRY_ID }}

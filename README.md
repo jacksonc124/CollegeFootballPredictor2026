@@ -99,6 +99,13 @@ Pick'em tab shows a warning once it's within 5 days of expiring, so you don't ju
 discover it when the pool filtering silently stops working. Absent entirely, the
 Pick'em tab works exactly as before (full-slate Top 12 only).
 
+**Replacing an expired cookie** — with Supabase configured (see above), the cookie
+warning comes with a "🔄 Replace CBS cookie" box right there in the Pick'em tab: paste
+the fresh cookie and save, no editing secrets or redeploying. It's saved to Supabase and
+picked up by both the Streamlit app (next rerun) and the weekly Discord push (next run)
+immediately — no separate GitHub secret update either. Without Supabase configured,
+you're back to editing the `CBS_COOKIE` secret directly (steps 1-3 above).
+
 **This integration is unofficial** — CBS has no public API docs for this, so it was
 built by reverse-engineering a real captured request (see `cbs_pickem.py`'s module
 docstring) and may break if CBS changes their page. If it stops working, the error
@@ -125,6 +132,12 @@ repository secrets (see "filter picks to your actual CBS Pick'em pool" above —
 values, just copied into Actions secrets instead of Streamlit secrets), the push uses
 those too; otherwise it posts the full-slate Top 12. You can also trigger it on demand
 from the Actions tab (`workflow_dispatch`) instead of waiting for Tuesday.
+
+Adding `SUPABASE_URL`/`SUPABASE_KEY` as repository secrets (same Supabase project as
+everything else) means this job always uses whatever cookie you most recently saved via
+the Pick'em tab's "🔄 Replace CBS cookie" box, instead of whatever's in the `CBS_COOKIE`
+secret — so replacing an expired cookie there also fixes this job, with nothing else to
+update.
 
 Run the dashboard with:
 
